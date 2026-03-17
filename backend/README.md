@@ -45,9 +45,9 @@ backend/
 
 ## Notes
 
-- This is an in-memory skeleton (no external database yet).
+- Data is stored in a local SQLite database file (`backend/smse_erp.db`).
 - APIs are versioned under `/api/v1`.
-- You can replace `app/db.py` with a real database layer later without changing route signatures.
+- The default DB is auto-initialized with sample inventory so Billing and Inventory work immediately.
 
 
 ## Quick endpoint checks (after server starts)
