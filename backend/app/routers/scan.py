@@ -10,9 +10,9 @@ def confirm_scanned_stock(payload: ScanConfirmRequest) -> ScanConfirmResponse:
     updated_count = 0
 
     for detected in payload.items:
-        matched = next((item for item in db.inventory.values() if item.name.lower() == detected.name.lower()), None)
+        matched = db.find_inventory_by_name(detected.name)
         if matched:
-            matched.stock += detected.qty
+            db.update_inventory_item(item_id=matched.id, name=None, stock=matched.stock + detected.qty)
         else:
             db.create_inventory_item(name=detected.name, stock=detected.qty)
         updated_count += 1
