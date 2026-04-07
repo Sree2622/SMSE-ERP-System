@@ -219,30 +219,6 @@ class _BillingScreenState extends State<BillingScreen> {
     );
   }
 
-  Future<void> _openSavedBillPreview(QueryDocumentSnapshot<Map<String, dynamic>> billDoc) {
-    final billData = billDoc.data();
-    final rawItems = (billData['items'] as List<dynamic>? ?? []);
-    final items = rawItems.map<Map<String, dynamic>>((item) {
-      if (item is Map<String, dynamic>) return item;
-      if (item is Map) {
-        return item.map((key, value) => MapEntry(key.toString(), value));
-      }
-      return <String, dynamic>{};
-    }).where((item) => item.isNotEmpty).toList();
-
-    final createdAt = (billData['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now();
-    final itemCount = _asInt(billData['itemCount']);
-    final total = _asInt(billData['total']);
-
-    return _showBillPreview(
-      billNumber: billDoc.id.substring(0, 8).toUpperCase(),
-      createdAt: createdAt,
-      itemCount: itemCount,
-      total: total,
-      items: items,
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
