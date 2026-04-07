@@ -17,6 +17,7 @@ class _BillingScreenState extends State<BillingScreen> {
   String? _cameraError;
   final Map<String, int> cart = {};
   String? _selectedHistoryBillId;
+  String _searchText = '';
 
   @override
   void initState() {
@@ -74,13 +75,24 @@ class _BillingScreenState extends State<BillingScreen> {
   }
 
   Future<void> _generateBill(List<QueryDocumentSnapshot<Map<String, dynamic>>> inventoryDocs) async {
+    if (cart.values.every((qty) => qty <= 0)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Add at least one item to generate a bill')),
+      );
+      return;
+    }
+
     final items = <Map<String, dynamic>>[];
+    var skippedOutOfStock = 0;
     for (final doc in inventoryDocs) {
       final qty = cart[doc.id] ?? 0;
       if (qty <= 0) continue;
       final data = doc.data();
       final stock = _asInt(data['stock']);
-      if (qty > stock) continue;
+      if (qty > stock) {
+        skippedOutOfStock++;
+        continue;
+      }
 
       final price = _asInt(data['price']);
 
@@ -94,7 +106,12 @@ class _BillingScreenState extends State<BillingScreen> {
       await doc.reference.update({'stock': stock - qty, 'updatedAt': Timestamp.now()});
     }
 
-    if (items.isEmpty) return;
+    if (items.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No bill created. Adjust quantities and try again.')),
+      );
+      return;
+    }
 
     final createdAt = Timestamp.now();
     final itemCount = items.fold<int>(0, (sum, item) => sum + _asInt(item['qty']));
@@ -109,6 +126,11 @@ class _BillingScreenState extends State<BillingScreen> {
 
     if (mounted) {
       setState(cart.clear);
+      if (skippedOutOfStock > 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$skippedOutOfStock item(s) exceeded stock and were skipped')),
+        );
+      }
       _showBillPreview(
         billNumber: billRef.id.substring(0, 8).toUpperCase(),
         createdAt: createdAt.toDate(),
@@ -342,7 +364,17 @@ class _BillingScreenState extends State<BillingScreen> {
       body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
         stream: FirestoreService.inventory.orderBy('name').snapshots(),
         builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return const Center(child: Text('Unable to load inventory right now.'));
+          }
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
           final docs = snapshot.data?.docs ?? [];
+          final filteredDocs = docs.where((doc) {
+            final name = (doc.data()['name'] ?? '').toString().toLowerCase();
+            return name.contains(_searchText);
+          }).toList();
           final total = _total(docs);
 
           return Column(
@@ -379,37 +411,61 @@ class _BillingScreenState extends State<BillingScreen> {
                 ),
               ),
               Expanded(
-                child: ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  itemCount: docs.length,
-                  itemBuilder: (context, index) {
-                    final doc = docs[index];
-                    final data = doc.data();
-                    final stock = _asInt(data['stock']);
-                    final price = _asInt(data['price']);
-                    final qty = cart[doc.id] ?? 0;
-
-                    return ListTile(
-                      tileColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      title: Text(data['name'] ?? 'Unnamed'),
-                      subtitle: Text('₹$price • Stock: $stock'),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.remove_circle_outline),
-                            onPressed: qty > 0 ? () => setState(() => cart[doc.id] = qty - 1) : null,
+                child: Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                      child: TextField(
+                        onChanged: (value) => setState(() => _searchText = value.toLowerCase()),
+                        decoration: InputDecoration(
+                          hintText: 'Search billing item...',
+                          prefixIcon: const Icon(Icons.search),
+                          filled: true,
+                          fillColor: Colors.white,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide.none,
                           ),
-                          Text('$qty'),
-                          IconButton(
-                            icon: const Icon(Icons.add_circle_outline),
-                            onPressed: qty < stock ? () => setState(() => cart[doc.id] = qty + 1) : null,
-                          ),
-                        ],
+                        ),
                       ),
-                    );
-                  },
+                    ),
+                    Expanded(
+                      child: filteredDocs.isEmpty
+                          ? const Center(child: Text('No inventory items found for this search.'))
+                          : ListView.builder(
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                              itemCount: filteredDocs.length,
+                              itemBuilder: (context, index) {
+                                final doc = filteredDocs[index];
+                                final data = doc.data();
+                                final stock = _asInt(data['stock']);
+                                final price = _asInt(data['price']);
+                                final qty = cart[doc.id] ?? 0;
+
+                                return ListTile(
+                                  tileColor: Colors.white,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                  title: Text(data['name'] ?? 'Unnamed'),
+                                  subtitle: Text('₹$price • Stock: $stock'),
+                                  trailing: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      IconButton(
+                                        icon: const Icon(Icons.remove_circle_outline),
+                                        onPressed: qty > 0 ? () => setState(() => cart[doc.id] = qty - 1) : null,
+                                      ),
+                                      Text('$qty'),
+                                      IconButton(
+                                        icon: const Icon(Icons.add_circle_outline),
+                                        onPressed: qty < stock ? () => setState(() => cart[doc.id] = qty + 1) : null,
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                  ],
                 ),
               ),
               Container(
@@ -434,7 +490,7 @@ class _BillingScreenState extends State<BillingScreen> {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed: docs.isEmpty ? null : () => _generateBill(docs),
+                        onPressed: docs.isEmpty || total <= 0 ? null : () => _generateBill(docs),
                         child: const Text('Generate Bill'),
                       ),
                     ),
