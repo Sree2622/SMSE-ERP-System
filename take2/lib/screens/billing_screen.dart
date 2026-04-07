@@ -30,6 +30,13 @@ class _BillingScreenState extends State<BillingScreen> {
     return int.tryParse(value?.toString() ?? '') ?? 0;
   }
 
+  String _twoDigits(int value) => value.toString().padLeft(2, '0');
+
+  String _formatDateTime(DateTime value) {
+    return '${_twoDigits(value.day)}/${_twoDigits(value.month)}/${value.year} '
+        '${_twoDigits(value.hour)}:${_twoDigits(value.minute)}';
+  }
+
   Future<void> _initCamera() async {
     try {
       final cameras = await availableCameras();
@@ -88,17 +95,152 @@ class _BillingScreenState extends State<BillingScreen> {
 
     if (items.isEmpty) return;
 
-    await FirestoreService.bills.add({
+    final createdAt = Timestamp.now();
+    final itemCount = items.fold<int>(0, (sum, item) => sum + _asInt(item['qty']));
+    final total = items.fold<int>(0, (sum, item) => sum + _asInt(item['qty']) * _asInt(item['price']));
+
+    final billRef = await FirestoreService.bills.add({
       'items': items,
-      'itemCount': items.fold<int>(0, (sum, item) => sum + _asInt(item['qty'])),
-      'total': items.fold<int>(0, (sum, item) => sum + _asInt(item['qty']) * _asInt(item['price'])),
-      'createdAt': Timestamp.now(),
+      'itemCount': itemCount,
+      'total': total,
+      'createdAt': createdAt,
     });
 
     if (mounted) {
       setState(cart.clear);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bill generated and saved')));
+      _showBillPreview(
+        billNumber: billRef.id.substring(0, 8).toUpperCase(),
+        createdAt: createdAt.toDate(),
+        itemCount: itemCount,
+        total: total,
+        items: items,
+      );
     }
+  }
+
+  Future<void> _showBillPreview({
+    required String billNumber,
+    required DateTime createdAt,
+    required int itemCount,
+    required int total,
+    required List<Map<String, dynamic>> items,
+  }) {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.8,
+          minChildSize: 0.6,
+          maxChildSize: 0.95,
+          builder: (context, scrollController) {
+            return Container(
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: ListView(
+                controller: scrollController,
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
+                children: [
+                  const Center(
+                    child: Text(
+                      'Invoice / Bill',
+                      style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text('Bill No: $billNumber'),
+                  Text('Date: ${_formatDateTime(createdAt)}'),
+                  const Divider(height: 30),
+                  ...items.map((item) {
+                    final qty = _asInt(item['qty']);
+                    final price = _asInt(item['price']);
+                    final amount = qty * price;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              item['name']?.toString() ?? 'Unnamed Item',
+                              style: const TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                          Text('$qty x ₹$price'),
+                          const SizedBox(width: 12),
+                          Text(
+                            '₹$amount',
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                  const Divider(height: 30),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Total Items'),
+                      Text('$itemCount'),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Grand Total',
+                        style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                      ),
+                      Text(
+                        '₹$total',
+                        style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Done'),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _openSavedBillPreview(QueryDocumentSnapshot<Map<String, dynamic>> billDoc) {
+    final billData = billDoc.data();
+    final rawItems = (billData['items'] as List<dynamic>? ?? []);
+    final items = rawItems.map<Map<String, dynamic>>((item) {
+      if (item is Map<String, dynamic>) return item;
+      if (item is Map) {
+        return item.map((key, value) => MapEntry(key.toString(), value));
+      }
+      return <String, dynamic>{};
+    }).where((item) => item.isNotEmpty).toList();
+
+    final createdAt = (billData['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now();
+    final itemCount = _asInt(billData['itemCount']);
+    final total = _asInt(billData['total']);
+
+    return _showBillPreview(
+      billNumber: billDoc.id.substring(0, 8).toUpperCase(),
+      createdAt: createdAt,
+      itemCount: itemCount,
+      total: total,
+      items: items,
+    );
   }
 
   @override
@@ -150,37 +292,116 @@ class _BillingScreenState extends State<BillingScreen> {
                 ),
               ),
               Expanded(
-                child: ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  itemCount: docs.length,
-                  itemBuilder: (context, index) {
-                    final doc = docs[index];
-                    final data = doc.data();
-                    final stock = _asInt(data['stock']);
-                    final price = _asInt(data['price']);
-                    final qty = cart[doc.id] ?? 0;
+                child: Column(
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: ListView.builder(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        itemCount: docs.length,
+                        itemBuilder: (context, index) {
+                          final doc = docs[index];
+                          final data = doc.data();
+                          final stock = _asInt(data['stock']);
+                          final price = _asInt(data['price']);
+                          final qty = cart[doc.id] ?? 0;
 
-                    return ListTile(
-                      tileColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      title: Text(data['name'] ?? 'Unnamed'),
-                      subtitle: Text('₹$price • Stock: $stock'),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.remove_circle_outline),
-                            onPressed: qty > 0 ? () => setState(() => cart[doc.id] = qty - 1) : null,
-                          ),
-                          Text('$qty'),
-                          IconButton(
-                            icon: const Icon(Icons.add_circle_outline),
-                            onPressed: qty < stock ? () => setState(() => cart[doc.id] = qty + 1) : null,
-                          ),
-                        ],
+                          return ListTile(
+                            tileColor: Colors.white,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            title: Text(data['name'] ?? 'Unnamed'),
+                            subtitle: Text('₹$price • Stock: $stock'),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.remove_circle_outline),
+                                  onPressed: qty > 0 ? () => setState(() => cart[doc.id] = qty - 1) : null,
+                                ),
+                                Text('$qty'),
+                                IconButton(
+                                  icon: const Icon(Icons.add_circle_outline),
+                                  onPressed: qty < stock ? () => setState(() => cart[doc.id] = qty + 1) : null,
+                                ),
+                              ],
+                            ),
+                          );
+                        },
                       ),
-                    );
-                  },
+                    ),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      flex: 2,
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 16),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Column(
+                          children: [
+                            const Padding(
+                              padding: EdgeInsets.fromLTRB(14, 12, 14, 6),
+                              child: Row(
+                                children: [
+                                  Icon(Icons.history, size: 20),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Billing History',
+                                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Expanded(
+                              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                                stream: FirestoreService.bills
+                                    .orderBy('createdAt', descending: true)
+                                    .limit(20)
+                                    .snapshots(),
+                                builder: (context, billSnapshot) {
+                                  final billDocs = billSnapshot.data?.docs ?? [];
+                                  if (billDocs.isEmpty) {
+                                    return const Center(
+                                      child: Text('No past bills yet'),
+                                    );
+                                  }
+
+                                  return ListView.separated(
+                                    itemCount: billDocs.length,
+                                    padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+                                    separatorBuilder: (_, __) => const Divider(height: 1),
+                                    itemBuilder: (context, index) {
+                                      final billDoc = billDocs[index];
+                                      final data = billDoc.data();
+                                      final total = _asInt(data['total']);
+                                      final itemCount = _asInt(data['itemCount']);
+                                      final createdAt =
+                                          (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now();
+
+                                      return ListTile(
+                                        dense: true,
+                                        title: Text('Bill ${billDoc.id.substring(0, 8).toUpperCase()}'),
+                                        subtitle: Text(
+                                          '${_formatDateTime(createdAt)} • $itemCount items',
+                                          style: const TextStyle(fontSize: 12),
+                                        ),
+                                        trailing: Text(
+                                          '₹$total',
+                                          style: const TextStyle(fontWeight: FontWeight.w700),
+                                        ),
+                                        onTap: () => _openSavedBillPreview(billDoc),
+                                      );
+                                    },
+                                  );
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
               Container(
