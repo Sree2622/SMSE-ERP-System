@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart'; // 👈 ADD THIS
+
 import '../widgets/custom_button.dart';
 import 'scan_screen.dart';
 import 'inventory_screen.dart';
@@ -6,7 +8,32 @@ import 'billing_screen.dart';
 import 'reports_screen.dart';
 import 'settings_screen.dart';
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
+  @override
+  _HomeScreenState createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+
+  @override
+  void initState() {
+    super.initState();
+    testFirebase(); // 👈 TEST RUNS WHEN APP OPENS
+  }
+
+  void testFirebase() async {
+    try {
+      var snapshot = await FirebaseFirestore.instance
+          .collection('inventory_items')
+          .get();
+
+      print("🔥 Firebase connected successfully!");
+      print("Documents count: ${snapshot.docs.length}");
+    } catch (e) {
+      print("❌ Firebase error: $e");
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
