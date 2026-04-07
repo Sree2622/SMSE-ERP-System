@@ -16,6 +16,7 @@ class _BillingScreenState extends State<BillingScreen> {
   Future<void>? _initializeControllerFuture;
   String? _cameraError;
   final Map<String, int> cart = {};
+  String? _selectedHistoryBillId;
 
   @override
   void initState() {
@@ -219,6 +220,115 @@ class _BillingScreenState extends State<BillingScreen> {
     );
   }
 
+  Future<void> _openHistoryBillPreview(QueryDocumentSnapshot<Map<String, dynamic>> billDoc) async {
+    final data = billDoc.data();
+    final rawItems = (data['items'] as List<dynamic>? ?? []);
+    final items = rawItems
+        .whereType<Map<dynamic, dynamic>>()
+        .map<Map<String, dynamic>>((item) => Map<String, dynamic>.from(item))
+        .toList();
+    final createdAtTimestamp = data['createdAt'] as Timestamp?;
+    final createdAt = createdAtTimestamp?.toDate() ?? DateTime.now();
+
+    final itemCount = _asInt(data['itemCount']);
+    final total = _asInt(data['total']);
+
+    await _showBillPreview(
+      billNumber: billDoc.id.substring(0, 8).toUpperCase(),
+      createdAt: createdAt,
+      itemCount: itemCount,
+      total: total,
+      items: items,
+    );
+  }
+
+  Widget _buildBillingHistory() {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirestoreService.bills.orderBy('createdAt', descending: true).limit(15).snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const SizedBox(
+            height: 74,
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        final billDocs = snapshot.data?.docs ?? [];
+        if (billDocs.isEmpty) {
+          return const Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: Card(
+              child: ListTile(
+                leading: Icon(Icons.history_toggle_off),
+                title: Text('Billing history'),
+                subtitle: Text('No past bills yet. Generate your first bill.'),
+              ),
+            ),
+          );
+        }
+
+        return SizedBox(
+          height: 112,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            itemCount: billDocs.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 12),
+            itemBuilder: (context, index) {
+              final billDoc = billDocs[index];
+              final bill = billDoc.data();
+              final createdAt = (bill['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now();
+              final total = _asInt(bill['total']);
+              final isSelected = _selectedHistoryBillId == billDoc.id;
+
+              return SizedBox(
+                width: 220,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(14),
+                  onTap: () async {
+                    setState(() => _selectedHistoryBillId = billDoc.id);
+                    await _openHistoryBillPreview(billDoc);
+                  },
+                  child: Card(
+                    elevation: isSelected ? 2 : 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      side: BorderSide(
+                        color: isSelected ? const Color(0xff4e73df) : Colors.grey.shade300,
+                      ),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Bill ${billDoc.id.substring(0, 8).toUpperCase()}',
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _formatDateTime(createdAt),
+                            style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                          ),
+                          const Spacer(),
+                          Text(
+                            '₹$total',
+                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -237,6 +347,7 @@ class _BillingScreenState extends State<BillingScreen> {
 
           return Column(
             children: [
+              _buildBillingHistory(),
               Container(
                 height: 220,
                 margin: const EdgeInsets.all(16),
