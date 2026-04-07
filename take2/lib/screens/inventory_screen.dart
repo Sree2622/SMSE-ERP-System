@@ -12,6 +12,8 @@ class InventoryScreen extends StatefulWidget {
 
 class _InventoryScreenState extends State<InventoryScreen> {
   String searchText = '';
+  String stockFilter = 'all';
+  final TextEditingController _searchController = TextEditingController();
 
   Color getStockColor(int stock) {
     if (stock <= 5) return Colors.red;
@@ -52,10 +54,23 @@ class _InventoryScreenState extends State<InventoryScreen> {
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
           FilledButton(
             onPressed: () async {
+              final name = nameController.text.trim();
+              final stock = int.tryParse(stockController.text.trim()) ?? -1;
+              final price = int.tryParse(priceController.text.trim()) ?? -1;
+
+              if (name.isEmpty || stock < 0 || price < 0) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Please enter valid item name, stock and price')),
+                  );
+                }
+                return;
+              }
+
               final data = {
-                'name': nameController.text.trim(),
-                'stock': int.tryParse(stockController.text.trim()) ?? 0,
-                'price': int.tryParse(priceController.text.trim()) ?? 0,
+                'name': name,
+                'stock': stock,
+                'price': price,
                 'updatedAt': Timestamp.now(),
               };
 
@@ -72,6 +87,49 @@ class _InventoryScreenState extends State<InventoryScreen> {
         ],
       ),
     );
+  }
+
+  bool _matchesFilter(int stock) {
+    switch (stockFilter) {
+      case 'low':
+        return stock <= 5;
+      case 'medium':
+        return stock > 5 && stock <= 15;
+      case 'high':
+        return stock > 15;
+      default:
+        return true;
+    }
+  }
+
+  Future<void> _confirmDelete(DocumentSnapshot<Map<String, dynamic>> doc) async {
+    final name = doc.data()?['name']?.toString() ?? 'this item';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete item'),
+        content: Text('Are you sure you want to delete $name?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await doc.reference.delete();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$name deleted')),
+        );
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   @override
@@ -94,14 +152,53 @@ class _InventoryScreenState extends State<InventoryScreen> {
           Padding(
             padding: const EdgeInsets.all(16),
             child: TextField(
+              controller: _searchController,
               onChanged: (value) => setState(() => searchText = value.toLowerCase()),
               decoration: InputDecoration(
                 hintText: 'Search item...',
                 prefixIcon: const Icon(Icons.search),
+                suffixIcon: searchText.isEmpty
+                    ? null
+                    : IconButton(
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() => searchText = '');
+                        },
+                        icon: const Icon(Icons.clear),
+                      ),
                 filled: true,
                 fillColor: Colors.white,
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
               ),
+            ),
+          ),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: Wrap(
+              spacing: 8,
+              children: [
+                ChoiceChip(
+                  label: const Text('All'),
+                  selected: stockFilter == 'all',
+                  onSelected: (_) => setState(() => stockFilter = 'all'),
+                ),
+                ChoiceChip(
+                  label: const Text('Low'),
+                  selected: stockFilter == 'low',
+                  onSelected: (_) => setState(() => stockFilter = 'low'),
+                ),
+                ChoiceChip(
+                  label: const Text('Medium'),
+                  selected: stockFilter == 'medium',
+                  onSelected: (_) => setState(() => stockFilter = 'medium'),
+                ),
+                ChoiceChip(
+                  label: const Text('High'),
+                  selected: stockFilter == 'high',
+                  onSelected: (_) => setState(() => stockFilter = 'high'),
+                ),
+              ],
             ),
           ),
           Expanded(
@@ -111,14 +208,22 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 }
+                if (snapshot.hasError) {
+                  return const Center(child: Text('Unable to load inventory right now.'));
+                }
                 if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
                   return const Center(child: Text('No inventory items. Add your first item.'));
                 }
 
                 final docs = snapshot.data!.docs.where((doc) {
                   final name = (doc.data()['name'] ?? '').toString().toLowerCase();
-                  return name.contains(searchText);
+                  final stock = (doc.data()['stock'] ?? 0) as int;
+                  return name.contains(searchText) && _matchesFilter(stock);
                 }).toList();
+
+                if (docs.isEmpty) {
+                  return const Center(child: Text('No items match your filters.'));
+                }
 
                 return ListView.builder(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -145,7 +250,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           ),
                           IconButton(onPressed: () => _showItemDialog(doc: doc), icon: const Icon(Icons.edit)),
                           IconButton(
-                            onPressed: () => doc.reference.delete(),
+                            onPressed: () => _confirmDelete(doc),
                             icon: const Icon(Icons.delete, color: Colors.redAccent),
                           ),
                         ],
