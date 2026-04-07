@@ -1,7 +1,10 @@
+import 'package:camera/camera.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../models/kirana_detection.dart';
 import '../services/firestore_service.dart';
+import '../services/kirana_vision_agent.dart';
 
 class ScanScreen extends StatefulWidget {
   const ScanScreen({super.key});
@@ -12,6 +15,126 @@ class ScanScreen extends StatefulWidget {
 
 class _ScanScreenState extends State<ScanScreen> {
   final Map<String, int> scannedQty = {};
+  final KiranaVisionAgent _visionAgent = KiranaVisionAgent();
+
+  CameraController? _cameraController;
+  bool _isCameraLoading = true;
+  bool _isAnalyzing = false;
+  String? _scanMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeCamera();
+  }
+
+  Future<void> _initializeCamera() async {
+    try {
+      final cameras = await availableCameras();
+      if (cameras.isEmpty) {
+        setState(() {
+          _scanMessage = 'No camera available on this device.';
+          _isCameraLoading = false;
+        });
+        return;
+      }
+
+      final preferred = cameras.firstWhere(
+        (camera) => camera.lensDirection == CameraLensDirection.back,
+        orElse: () => cameras.first,
+      );
+
+      final controller = CameraController(
+        preferred,
+        ResolutionPreset.medium,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.jpeg,
+      );
+
+      await controller.initialize();
+
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
+
+      setState(() {
+        _cameraController = controller;
+        _isCameraLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isCameraLoading = false;
+        _scanMessage = 'Camera setup failed. Please check permissions.';
+      });
+    }
+  }
+
+  Future<void> _analyzeFrame(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) async {
+    if (_isAnalyzing || _cameraController == null || !_cameraController!.value.isInitialized) return;
+
+    setState(() {
+      _isAnalyzing = true;
+      _scanMessage = 'Analyzing frame with kirana LLM agent...';
+    });
+
+    try {
+      final image = await _cameraController!.takePicture();
+      final inventoryByName = {
+        for (final doc in docs)
+          (doc.data()['name'] ?? '').toString().toLowerCase().trim(): doc,
+      };
+
+      final detections = await _visionAgent.analyzeImage(
+        imagePath: image.path,
+        inventoryNames: docs.map((d) => (d.data()['name'] ?? '').toString()).toList(),
+      );
+
+      _applyDetections(detections, inventoryByName);
+
+      if (!mounted) return;
+      setState(() {
+        _scanMessage = detections.isEmpty
+            ? 'No known kirana item detected. Try better lighting or angle.'
+            : 'Detected ${detections.length} item(s). Review quantities below.';
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _scanMessage = 'Frame analysis failed. Please retry.';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isAnalyzing = false;
+        });
+      }
+    }
+  }
+
+  void _applyDetections(
+    List<KiranaDetection> detections,
+    Map<String, QueryDocumentSnapshot<Map<String, dynamic>>> inventoryByName,
+  ) {
+    if (detections.isEmpty) return;
+
+    final updates = <String, int>{};
+    for (final detection in detections) {
+      final key = detection.label.toLowerCase().trim();
+      final doc = inventoryByName[key];
+      if (doc == null) continue;
+
+      final existing = scannedQty[doc.id] ?? 0;
+      updates[doc.id] = existing + detection.suggestedQuantity;
+    }
+
+    if (updates.isNotEmpty) {
+      setState(() {
+        scannedQty.addAll(updates);
+      });
+    }
+  }
 
   Future<void> _saveScannedStock(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) async {
     for (final doc in docs) {
@@ -24,12 +147,19 @@ class _ScanScreenState extends State<ScanScreen> {
     await FirestoreService.db.collection('scan_logs').add({
       'items': scannedQty.entries.where((e) => e.value > 0).map((e) => {'itemId': e.key, 'qty': e.value}).toList(),
       'createdAt': Timestamp.now(),
+      'source': 'camera_llm_agent',
     });
 
     if (mounted) {
       setState(scannedQty.clear);
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Scanned stock saved to Firebase')));
     }
+  }
+
+  @override
+  void dispose() {
+    _cameraController?.dispose();
+    super.dispose();
   }
 
   @override
@@ -49,16 +179,51 @@ class _ScanScreenState extends State<ScanScreen> {
           return Column(
             children: [
               Container(
-                height: 220,
+                height: 240,
                 margin: const EdgeInsets.all(16),
                 decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(20)),
-                child: const Center(
-                  child: Text('Camera/barcode integration can update scanned quantities',
-                      textAlign: TextAlign.center, style: TextStyle(color: Colors.white70)),
-                ),
+                clipBehavior: Clip.antiAlias,
+                child: _isCameraLoading
+                    ? const Center(child: CircularProgressIndicator())
+                    : (_cameraController?.value.isInitialized ?? false)
+                        ? Stack(
+                            children: [
+                              Positioned.fill(child: CameraPreview(_cameraController!)),
+                              Positioned(
+                                bottom: 10,
+                                left: 10,
+                                right: 10,
+                                child: ElevatedButton.icon(
+                                  onPressed: docs.isEmpty || _isAnalyzing ? null : () => _analyzeFrame(docs),
+                                  icon: _isAnalyzing
+                                      ? const SizedBox.square(
+                                          dimension: 16,
+                                          child: CircularProgressIndicator(strokeWidth: 2),
+                                        )
+                                      : const Icon(Icons.auto_awesome),
+                                  label: Text(_isAnalyzing ? 'Analyzing...' : 'Analyze Frame'),
+                                ),
+                              ),
+                            ],
+                          )
+                        : Center(
+                            child: Text(
+                              _scanMessage ?? 'Camera unavailable',
+                              style: const TextStyle(color: Colors.white70),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
               ),
+              if (_scanMessage != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(_scanMessage!, style: const TextStyle(color: Colors.black54)),
+                  ),
+                ),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
