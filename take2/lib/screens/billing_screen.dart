@@ -14,6 +14,7 @@ class BillingScreen extends StatefulWidget {
 class _BillingScreenState extends State<BillingScreen> {
   CameraController? _controller;
   Future<void>? _initializeControllerFuture;
+  String? _cameraError;
   final Map<String, int> cart = {};
 
   @override
@@ -22,11 +23,29 @@ class _BillingScreenState extends State<BillingScreen> {
     _initCamera();
   }
 
+  int _asInt(dynamic value) {
+    if (value is int) return value;
+    if (value is double) return value.round();
+    if (value is num) return value.round();
+    return int.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
   Future<void> _initCamera() async {
-    final cameras = await availableCameras();
-    if (cameras.isEmpty) return;
-    _controller = CameraController(cameras.first, ResolutionPreset.medium);
-    _initializeControllerFuture = _controller!.initialize();
+    try {
+      final cameras = await availableCameras();
+      if (cameras.isEmpty) {
+        _cameraError = 'No camera found on this device';
+        if (mounted) setState(() {});
+        return;
+      }
+
+      _controller = CameraController(cameras.first, ResolutionPreset.medium, enableAudio: false);
+      _initializeControllerFuture = _controller!.initialize();
+      await _initializeControllerFuture;
+    } catch (_) {
+      _cameraError = 'Camera could not be started';
+    }
+
     if (mounted) setState(() {});
   }
 
@@ -40,7 +59,7 @@ class _BillingScreenState extends State<BillingScreen> {
     var sum = 0;
     for (final doc in inventoryDocs) {
       final qty = cart[doc.id] ?? 0;
-      final price = (doc.data()['price'] ?? 0) as int;
+      final price = _asInt(doc.data()['price']);
       sum += qty * price;
     }
     return sum;
@@ -52,14 +71,16 @@ class _BillingScreenState extends State<BillingScreen> {
       final qty = cart[doc.id] ?? 0;
       if (qty <= 0) continue;
       final data = doc.data();
-      final stock = (data['stock'] ?? 0) as int;
+      final stock = _asInt(data['stock']);
       if (qty > stock) continue;
+
+      final price = _asInt(data['price']);
 
       items.add({
         'itemId': doc.id,
         'name': data['name'],
         'qty': qty,
-        'price': data['price'] ?? 0,
+        'price': price,
       });
 
       await doc.reference.update({'stock': stock - qty, 'updatedAt': Timestamp.now()});
@@ -69,8 +90,8 @@ class _BillingScreenState extends State<BillingScreen> {
 
     await FirestoreService.bills.add({
       'items': items,
-      'itemCount': items.fold<int>(0, (sum, item) => sum + (item['qty'] as int)),
-      'total': items.fold<int>(0, (sum, item) => sum + (item['qty'] as int) * (item['price'] as int)),
+      'itemCount': items.fold<int>(0, (sum, item) => sum + _asInt(item['qty'])),
+      'total': items.fold<int>(0, (sum, item) => sum + _asInt(item['qty']) * _asInt(item['price'])),
       'createdAt': Timestamp.now(),
     });
 
@@ -104,17 +125,28 @@ class _BillingScreenState extends State<BillingScreen> {
                 decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(20)),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(20),
-                  child: _controller == null
-                      ? const Center(child: CircularProgressIndicator())
-                      : FutureBuilder(
-                          future: _initializeControllerFuture,
-                          builder: (context, cameraSnapshot) {
-                            if (cameraSnapshot.connectionState == ConnectionState.done) {
-                              return CameraPreview(_controller!);
-                            }
-                            return const Center(child: CircularProgressIndicator());
-                          },
-                        ),
+                  child: _cameraError != null
+                      ? Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Text(
+                              _cameraError!,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: Colors.white70),
+                            ),
+                          ),
+                        )
+                      : _controller == null
+                          ? const Center(child: CircularProgressIndicator())
+                          : FutureBuilder(
+                              future: _initializeControllerFuture,
+                              builder: (context, cameraSnapshot) {
+                                if (cameraSnapshot.connectionState == ConnectionState.done) {
+                                  return CameraPreview(_controller!);
+                                }
+                                return const Center(child: CircularProgressIndicator());
+                              },
+                            ),
                 ),
               ),
               Expanded(
@@ -124,8 +156,8 @@ class _BillingScreenState extends State<BillingScreen> {
                   itemBuilder: (context, index) {
                     final doc = docs[index];
                     final data = doc.data();
-                    final stock = (data['stock'] ?? 0) as int;
-                    final price = (data['price'] ?? 0) as int;
+                    final stock = _asInt(data['stock']);
+                    final price = _asInt(data['price']);
                     final qty = cart[doc.id] ?? 0;
 
                     return ListTile(
@@ -138,16 +170,12 @@ class _BillingScreenState extends State<BillingScreen> {
                         children: [
                           IconButton(
                             icon: const Icon(Icons.remove_circle_outline),
-                            onPressed: qty > 0
-                                ? () => setState(() => cart[doc.id] = qty - 1)
-                                : null,
+                            onPressed: qty > 0 ? () => setState(() => cart[doc.id] = qty - 1) : null,
                           ),
                           Text('$qty'),
                           IconButton(
                             icon: const Icon(Icons.add_circle_outline),
-                            onPressed: qty < stock
-                                ? () => setState(() => cart[doc.id] = qty + 1)
-                                : null,
+                            onPressed: qty < stock ? () => setState(() => cart[doc.id] = qty + 1) : null,
                           ),
                         ],
                       ),
