@@ -1,7 +1,12 @@
-import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+
+import '../services/firestore_service.dart';
 
 class BillingScreen extends StatefulWidget {
+  const BillingScreen({super.key});
+
   @override
   State<BillingScreen> createState() => _BillingScreenState();
 }
@@ -9,14 +14,7 @@ class BillingScreen extends StatefulWidget {
 class _BillingScreenState extends State<BillingScreen> {
   CameraController? _controller;
   Future<void>? _initializeControllerFuture;
-
-  List<Map<String, dynamic>> cart = [
-    {"name": "Maggi", "qty": 2, "price": 15},
-    {"name": "Parle-G", "qty": 1, "price": 10},
-  ];
-
-  int get total =>
-      cart.fold(0, (sum, item) => sum + (item["qty"] * item["price"] as int));
+  final Map<String, int> cart = {};
 
   @override
   void initState() {
@@ -26,15 +24,10 @@ class _BillingScreenState extends State<BillingScreen> {
 
   Future<void> _initCamera() async {
     final cameras = await availableCameras();
-    final firstCamera = cameras.first;
-
-    _controller = CameraController(
-      firstCamera,
-      ResolutionPreset.medium,
-    );
-
+    if (cameras.isEmpty) return;
+    _controller = CameraController(cameras.first, ResolutionPreset.medium);
     _initializeControllerFuture = _controller!.initialize();
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
   @override
@@ -43,244 +36,157 @@ class _BillingScreenState extends State<BillingScreen> {
     super.dispose();
   }
 
-  void increaseQty(int index) {
-    setState(() {
-      cart[index]["qty"]++;
-    });
+  int _total(List<QueryDocumentSnapshot<Map<String, dynamic>>> inventoryDocs) {
+    var sum = 0;
+    for (final doc in inventoryDocs) {
+      final qty = cart[doc.id] ?? 0;
+      final price = (doc.data()['price'] ?? 0) as int;
+      sum += qty * price;
+    }
+    return sum;
   }
 
-  void decreaseQty(int index) {
-    setState(() {
-      if (cart[index]["qty"] > 1) {
-        cart[index]["qty"]--;
-      }
+  Future<void> _generateBill(List<QueryDocumentSnapshot<Map<String, dynamic>>> inventoryDocs) async {
+    final items = <Map<String, dynamic>>[];
+    for (final doc in inventoryDocs) {
+      final qty = cart[doc.id] ?? 0;
+      if (qty <= 0) continue;
+      final data = doc.data();
+      final stock = (data['stock'] ?? 0) as int;
+      if (qty > stock) continue;
+
+      items.add({
+        'itemId': doc.id,
+        'name': data['name'],
+        'qty': qty,
+        'price': data['price'] ?? 0,
+      });
+
+      await doc.reference.update({'stock': stock - qty, 'updatedAt': Timestamp.now()});
+    }
+
+    if (items.isEmpty) return;
+
+    await FirestoreService.bills.add({
+      'items': items,
+      'itemCount': items.fold<int>(0, (sum, item) => sum + (item['qty'] as int)),
+      'total': items.fold<int>(0, (sum, item) => sum + (item['qty'] as int) * (item['price'] as int)),
+      'createdAt': Timestamp.now(),
     });
+
+    if (mounted) {
+      setState(cart.clear);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bill generated and saved')));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Color(0xfff5f7fa),
+      backgroundColor: const Color(0xfff5f7fa),
       appBar: AppBar(
         elevation: 0,
         backgroundColor: Colors.white,
-        title: Text(
-          "New Bill",
-          style: TextStyle(
-              color: Colors.black87, fontWeight: FontWeight.bold),
-        ),
-        iconTheme: IconThemeData(color: Colors.black87),
+        iconTheme: const IconThemeData(color: Colors.black87),
+        title: const Text('New Bill', style: TextStyle(color: Colors.black87, fontWeight: FontWeight.bold)),
       ),
+      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: FirestoreService.inventory.orderBy('name').snapshots(),
+        builder: (context, snapshot) {
+          final docs = snapshot.data?.docs ?? [];
+          final total = _total(docs);
 
-      body: Column(
-        children: [
+          return Column(
+            children: [
+              Container(
+                height: 220,
+                margin: const EdgeInsets.all(16),
+                decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(20)),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(20),
+                  child: _controller == null
+                      ? const Center(child: CircularProgressIndicator())
+                      : FutureBuilder(
+                          future: _initializeControllerFuture,
+                          builder: (context, cameraSnapshot) {
+                            if (cameraSnapshot.connectionState == ConnectionState.done) {
+                              return CameraPreview(_controller!);
+                            }
+                            return const Center(child: CircularProgressIndicator());
+                          },
+                        ),
+                ),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  itemCount: docs.length,
+                  itemBuilder: (context, index) {
+                    final doc = docs[index];
+                    final data = doc.data();
+                    final stock = (data['stock'] ?? 0) as int;
+                    final price = (data['price'] ?? 0) as int;
+                    final qty = cart[doc.id] ?? 0;
 
-          /// 📷 CAMERA PREVIEW SECTION
-          Container(
-            height: 220,
-            margin: EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.black,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(20),
-              child: _controller == null
-                  ? Center(child: CircularProgressIndicator())
-                  : FutureBuilder(
-                      future: _initializeControllerFuture,
-                      builder: (context, snapshot) {
-                        if (snapshot.connectionState ==
-                            ConnectionState.done) {
-                          return Stack(
-                            alignment: Alignment.center,
-                            children: [
-
-                              /// Live Camera
-                              CameraPreview(_controller!),
-
-                              /// Scanning Frame Overlay
-                              Container(
-                                width: 200,
-                                height: 150,
-                                decoration: BoxDecoration(
-                                  border: Border.all(
-                                    color: Color(0xff4e73df),
-                                    width: 3,
-                                  ),
-                                  borderRadius:
-                                      BorderRadius.circular(12),
-                                ),
-                              ),
-
-                              Positioned(
-                                bottom: 10,
-                                child: Text(
-                                  "Scan barcode here",
-                                  style: TextStyle(
-                                      color: Colors.white70,
-                                      fontSize: 12),
-                                ),
-                              )
-                            ],
-                          );
-                        } else {
-                          return Center(
-                              child: CircularProgressIndicator());
-                        }
-                      },
-                    ),
-            ),
-          ),
-
-          /// 🛒 Cart Items
-          Expanded(
-            child: ListView.builder(
-              padding: EdgeInsets.symmetric(horizontal: 16),
-              itemCount: cart.length,
-              itemBuilder: (context, index) {
-                final item = cart[index];
-
-                return Container(
-                  margin: EdgeInsets.only(bottom: 12),
-                  padding: EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black12,
-                        blurRadius: 6,
-                        offset: Offset(0, 3),
-                      )
-                    ],
-                  ),
-                  child: Row(
-                    mainAxisAlignment:
-                        MainAxisAlignment.spaceBetween,
-                    children: [
-
-                      /// Item Info
-                      Column(
-                        crossAxisAlignment:
-                            CrossAxisAlignment.start,
+                    return ListTile(
+                      tileColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      title: Text(data['name'] ?? 'Unnamed'),
+                      subtitle: Text('₹$price • Stock: $stock'),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(
-                            item["name"],
-                            style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600),
+                          IconButton(
+                            icon: const Icon(Icons.remove_circle_outline),
+                            onPressed: qty > 0
+                                ? () => setState(() => cart[doc.id] = qty - 1)
+                                : null,
                           ),
-                          SizedBox(height: 6),
-                          Text(
-                            "₹${item["price"]} each",
-                            style: TextStyle(
-                                color: Colors.grey[600]),
+                          Text('$qty'),
+                          IconButton(
+                            icon: const Icon(Icons.add_circle_outline),
+                            onPressed: qty < stock
+                                ? () => setState(() => cart[doc.id] = qty + 1)
+                                : null,
                           ),
                         ],
                       ),
-
-                      /// Quantity Controls
-                      Row(
-                        children: [
-                          IconButton(
-                            onPressed: () =>
-                                decreaseQty(index),
-                            icon: Icon(Icons.remove_circle_outline),
-                          ),
-                          Text(
-                            "${item["qty"]}",
-                            style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16),
-                          ),
-                          IconButton(
-                            onPressed: () =>
-                                increaseQty(index),
-                            icon: Icon(Icons.add_circle_outline),
-                          ),
-                          SizedBox(width: 10),
-                          Text(
-                            "₹${item["qty"] * item["price"]}",
-                            style: TextStyle(
-                                fontWeight: FontWeight.bold),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
-
-          /// 💰 Bottom Summary Panel
-          Container(
-            padding: EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius:
-                  BorderRadius.vertical(top: Radius.circular(24)),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black12,
-                  blurRadius: 10,
-                  offset: Offset(0, -4),
-                )
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-
-                Row(
-                  mainAxisAlignment:
-                      MainAxisAlignment.spaceBetween,
+                    );
+                  },
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      "Total Amount",
-                      style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Total Amount'),
+                        Text('₹$total',
+                            style: const TextStyle(
+                                fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xff4e73df))),
+                      ],
                     ),
-                    Text(
-                      "₹$total",
-                      style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xff4e73df)),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: docs.isEmpty ? null : () => _generateBill(docs),
+                        child: const Text('Generate Bill'),
+                      ),
                     ),
                   ],
                 ),
-
-                SizedBox(height: 20),
-
-                SizedBox(
-                  width: double.infinity,
-                  height: 50,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Color(0xff4e73df),
-                      shape: RoundedRectangleBorder(
-                        borderRadius:
-                            BorderRadius.circular(12),
-                      ),
-                    ),
-                    onPressed: () {
-                      // TODO: Generate bill logic
-                    },
-                    child: Text(
-                      "Generate Bill",
-                      style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                )
-              ],
-            ),
-          ),
-        ],
+              ),
+            ],
+          );
+        },
       ),
     );
   }

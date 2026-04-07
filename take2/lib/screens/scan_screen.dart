@@ -1,208 +1,117 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
-class ScanScreen extends StatelessWidget {
-  final List<Map<String, dynamic>> detectedItems = [
-    {"name": "Maggi", "qty": 5},
-    {"name": "Parle-G", "qty": 10},
-    {"name": "Surf Excel", "qty": 3},
-  ];
+import '../services/firestore_service.dart';
+
+class ScanScreen extends StatefulWidget {
+  const ScanScreen({super.key});
+
+  @override
+  State<ScanScreen> createState() => _ScanScreenState();
+}
+
+class _ScanScreenState extends State<ScanScreen> {
+  final Map<String, int> scannedQty = {};
+
+  Future<void> _saveScannedStock(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) async {
+    for (final doc in docs) {
+      final qty = scannedQty[doc.id] ?? 0;
+      if (qty <= 0) continue;
+      final current = (doc.data()['stock'] ?? 0) as int;
+      await doc.reference.update({'stock': current + qty, 'updatedAt': Timestamp.now()});
+    }
+
+    await FirestoreService.db.collection('scan_logs').add({
+      'items': scannedQty.entries.where((e) => e.value > 0).map((e) => {'itemId': e.key, 'qty': e.value}).toList(),
+      'createdAt': Timestamp.now(),
+    });
+
+    if (mounted) {
+      setState(scannedQty.clear);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Scanned stock saved to Firebase')));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Color(0xfff5f7fa),
-
+      backgroundColor: const Color(0xfff5f7fa),
       appBar: AppBar(
         elevation: 0,
         backgroundColor: Colors.white,
-        iconTheme: IconThemeData(color: Colors.black87),
-        title: Text(
-          "Scan Stock",
-          style: TextStyle(
-              color: Colors.black87,
-              fontWeight: FontWeight.bold),
-        ),
+        iconTheme: const IconThemeData(color: Colors.black87),
+        title: const Text('Scan Stock', style: TextStyle(color: Colors.black87, fontWeight: FontWeight.bold)),
       ),
-
-      body: Column(
-        children: [
-
-          /// Camera Preview Section
-          Container(
-            height: 250,
-            margin: EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.black,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-
-                /// Camera Icon Placeholder
-                Icon(
-                  Icons.camera_alt,
-                  color: Colors.white54,
-                  size: 80,
+      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: FirestoreService.inventory.orderBy('name').snapshots(),
+        builder: (context, snapshot) {
+          final docs = snapshot.data?.docs ?? [];
+          return Column(
+            children: [
+              Container(
+                height: 220,
+                margin: const EdgeInsets.all(16),
+                decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(20)),
+                child: const Center(
+                  child: Text('Camera/barcode integration can update scanned quantities',
+                      textAlign: TextAlign.center, style: TextStyle(color: Colors.white70)),
                 ),
-
-                /// Scanning Frame Overlay
-                Container(
-                  width: 200,
-                  height: 200,
-                  decoration: BoxDecoration(
-                    border: Border.all(
-                      color: Color(0xff4e73df),
-                      width: 3,
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Detected Items', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    Text('${scannedQty.values.where((v) => v > 0).length} items'),
+                  ],
                 ),
+              ),
+              const SizedBox(height: 10),
+              Expanded(
+                child: ListView.builder(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  itemCount: docs.length,
+                  itemBuilder: (context, index) {
+                    final doc = docs[index];
+                    final data = doc.data();
+                    final qty = scannedQty[doc.id] ?? 0;
 
-                Positioned(
-                  bottom: 15,
-                  child: Text(
-                    "Align barcode within frame",
-                    style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: 12),
-                  ),
-                )
-              ],
-            ),
-          ),
-
-          /// Detected Items Header
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              mainAxisAlignment:
-                  MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  "Detected Items",
-                  style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold),
-                ),
-                Text(
-                  "${detectedItems.length} items",
-                  style: TextStyle(
-                      color: Colors.grey[600]),
-                )
-              ],
-            ),
-          ),
-
-          SizedBox(height: 10),
-
-          /// Detected Items List
-          Expanded(
-            child: ListView.builder(
-              padding:
-                  EdgeInsets.symmetric(horizontal: 16),
-              itemCount: detectedItems.length,
-              itemBuilder: (context, index) {
-                final item = detectedItems[index];
-
-                return Container(
-                  margin: EdgeInsets.only(bottom: 12),
-                  padding: EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius:
-                        BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black12,
-                        blurRadius: 6,
-                        offset: Offset(0, 3),
-                      )
-                    ],
-                  ),
-                  child: Row(
-                    mainAxisAlignment:
-                        MainAxisAlignment.spaceBetween,
-                    children: [
-
-                      /// Item Name
-                      Column(
-                        crossAxisAlignment:
-                            CrossAxisAlignment.start,
+                    return ListTile(
+                      tileColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      title: Text(data['name'] ?? 'Unnamed'),
+                      subtitle: Text('Detected quantity: $qty'),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(
-                            item["name"],
-                            style: TextStyle(
-                                fontWeight:
-                                    FontWeight.w600,
-                                fontSize: 16),
+                          IconButton(
+                            onPressed: qty > 0 ? () => setState(() => scannedQty[doc.id] = qty - 1) : null,
+                            icon: const Icon(Icons.remove_circle_outline),
                           ),
-                          SizedBox(height: 6),
-                          Text(
-                            "Quantity: ${item["qty"]}",
-                            style: TextStyle(
-                                color:
-                                    Colors.grey[600]),
+                          IconButton(
+                            onPressed: () => setState(() => scannedQty[doc.id] = qty + 1),
+                            icon: const Icon(Icons.add_circle_outline),
                           ),
                         ],
                       ),
-
-                      /// Confirm Icon
-                      CircleAvatar(
-                        radius: 20,
-                        backgroundColor:
-                            Colors.green.withOpacity(0.15),
-                        child: Icon(
-                          Icons.check,
-                          color: Colors.green,
-                        ),
-                      )
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
-
-          /// Bottom Action Panel
-          Container(
-            padding: EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius:
-                  BorderRadius.vertical(top: Radius.circular(24)),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black12,
-                  blurRadius: 10,
-                  offset: Offset(0, -4),
-                )
-              ],
-            ),
-            child: SizedBox(
-              width: double.infinity,
-              height: 50,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Color(0xff4e73df),
-                  shape: RoundedRectangleBorder(
-                    borderRadius:
-                        BorderRadius.circular(12),
-                  ),
-                ),
-                onPressed: () {
-                  // TODO: Save scanned stock
-                },
-                child: Text(
-                  "Confirm & Save",
-                  style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold),
+                    );
+                  },
                 ),
               ),
-            ),
-          )
-        ],
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: docs.isEmpty ? null : () => _saveScannedStock(docs),
+                    child: const Text('Confirm & Save'),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
