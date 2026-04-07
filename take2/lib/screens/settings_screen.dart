@@ -1,222 +1,113 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../services/firestore_service.dart';
+
 class SettingsScreen extends StatefulWidget {
+  const SettingsScreen({super.key});
+
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  bool isDarkMode = false;
+  Future<void> _editShopDetails(Map<String, dynamic> data) async {
+    final nameController = TextEditingController(text: data['storeName'] ?? '');
+    final gstController = TextEditingController(text: data['gst'] ?? '');
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Color(0xfff5f7fa),
-
-      appBar: AppBar(
-        elevation: 0,
-        backgroundColor: Colors.white,
-        iconTheme: IconThemeData(color: Colors.black87),
-        title: Text(
-          "Settings",
-          style: TextStyle(
-              color: Colors.black87,
-              fontWeight: FontWeight.bold),
-        ),
-      ),
-
-      body: SingleChildScrollView(
-        padding: EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Edit Shop Details'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-
-            /// Shop Profile Card
-            Container(
-              padding: EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                gradient: LinearGradient(
-                  colors: [Color(0xff4e73df), Color(0xff224abe)],
-                ),
-              ),
-              child: Row(
-                children: [
-                  CircleAvatar(
-                    radius: 28,
-                    backgroundColor: Colors.white24,
-                    child: Icon(Icons.store,
-                        color: Colors.white, size: 28),
-                  ),
-                  SizedBox(width: 15),
-                  Column(
-                    crossAxisAlignment:
-                        CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        "Ramesh Kirana Store",
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                        ),
-                      ),
-                      SizedBox(height: 4),
-                      Text(
-                        "GST: 22ABCDE1234F1Z5",
-                        style: TextStyle(
-                          color: Colors.white70,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  )
-                ],
-              ),
-            ),
-
-            SizedBox(height: 30),
-
-            /// General Section
-            Text(
-              "General",
-              style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold),
-            ),
-
-            SizedBox(height: 15),
-
-            _settingsTile(
-              icon: Icons.edit,
-              title: "Edit Shop Details",
-              subtitle: "Update name, GST & address",
-              onTap: () {},
-            ),
-
-            _settingsTile(
-              icon: Icons.print,
-              title: "Printer Settings",
-              subtitle: "Thermal printer setup",
-              onTap: () {},
-            ),
-
-            SizedBox(height: 25),
-
-            /// Preferences Section
-            Text(
-              "Preferences",
-              style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold),
-            ),
-
-            SizedBox(height: 15),
-
-            Container(
-              padding: EdgeInsets.symmetric(
-                  horizontal: 16, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius:
-                    BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black12,
-                    blurRadius: 6,
-                    offset: Offset(0, 3),
-                  )
-                ],
-              ),
-              child: SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                value: isDarkMode,
-                onChanged: (value) {
-                  setState(() {
-                    isDarkMode = value;
-                  });
-                },
-                title: Text(
-                  "Dark Mode",
-                  style: TextStyle(
-                      fontWeight: FontWeight.w600),
-                ),
-                secondary: Icon(Icons.dark_mode),
-              ),
-            ),
-
-            SizedBox(height: 25),
-
-            /// About Section
-            Text(
-              "About",
-              style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold),
-            ),
-
-            SizedBox(height: 15),
-
-            _settingsTile(
-              icon: Icons.info_outline,
-              title: "App Version",
-              subtitle: "v1.0.0",
-              onTap: () {},
-            ),
-
-            _settingsTile(
-              icon: Icons.logout,
-              title: "Logout",
-              subtitle: "Sign out from this device",
-              onTap: () {},
-              isDestructive: true,
-            ),
+            TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Store Name')),
+            TextField(controller: gstController, decoration: const InputDecoration(labelText: 'GST Number')),
           ],
         ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () async {
+              await FirestoreService.shopProfile.set({
+                'storeName': nameController.text.trim(),
+                'gst': gstController.text.trim(),
+                'updatedAt': Timestamp.now(),
+              }, SetOptions(merge: true));
+              if (mounted) Navigator.pop(context);
+            },
+            child: const Text('Save'),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _settingsTile({
-    required IconData icon,
-    required String title,
-    required String subtitle,
-    required VoidCallback onTap,
-    bool isDestructive = false,
-  }) {
-    return Container(
-      margin: EdgeInsets.only(bottom: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius:
-            BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black12,
-            blurRadius: 6,
-            offset: Offset(0, 3),
-          )
-        ],
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xfff5f7fa),
+      appBar: AppBar(
+        elevation: 0,
+        backgroundColor: Colors.white,
+        iconTheme: const IconThemeData(color: Colors.black87),
+        title: const Text('Settings', style: TextStyle(color: Colors.black87, fontWeight: FontWeight.bold)),
       ),
-      child: ListTile(
-        onTap: onTap,
-        leading: Icon(
-          icon,
-          color: isDestructive
-              ? Colors.red
-              : Colors.black87,
-        ),
-        title: Text(
-          title,
-          style: TextStyle(
-              fontWeight: FontWeight.w600,
-              color: isDestructive
-                  ? Colors.red
-                  : Colors.black87),
-        ),
-        subtitle: Text(subtitle),
-        trailing:
-            Icon(Icons.arrow_forward_ios, size: 16),
+      body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        stream: FirestoreService.shopProfile.snapshots(),
+        builder: (context, snapshot) {
+          final data = snapshot.data?.data() ??
+              {
+                'storeName': 'Set store name',
+                'gst': 'Set GST number',
+                'darkMode': false,
+              };
+
+          return ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  gradient: const LinearGradient(colors: [Color(0xff4e73df), Color(0xff224abe)]),
+                ),
+                child: Row(
+                  children: [
+                    const CircleAvatar(radius: 28, backgroundColor: Colors.white24, child: Icon(Icons.store, color: Colors.white)),
+                    const SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(data['storeName'] ?? '',
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                        Text('GST: ${data['gst'] ?? ''}', style: const TextStyle(color: Colors.white70)),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              ListTile(
+                tileColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                leading: const Icon(Icons.edit),
+                title: const Text('Edit Shop Details'),
+                onTap: () => _editShopDetails(data),
+              ),
+              const SizedBox(height: 12),
+              SwitchListTile(
+                value: (data['darkMode'] ?? false) as bool,
+                onChanged: (value) => FirestoreService.shopProfile.set({'darkMode': value}, SetOptions(merge: true)),
+                tileColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                secondary: const Icon(Icons.dark_mode),
+                title: const Text('Dark Mode'),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
