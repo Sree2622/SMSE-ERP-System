@@ -30,6 +30,13 @@ class _BillingScreenState extends State<BillingScreen> {
     return int.tryParse(value?.toString() ?? '') ?? 0;
   }
 
+  String _twoDigits(int value) => value.toString().padLeft(2, '0');
+
+  String _formatDateTime(DateTime value) {
+    return '${_twoDigits(value.day)}/${_twoDigits(value.month)}/${value.year} '
+        '${_twoDigits(value.hour)}:${_twoDigits(value.minute)}';
+  }
+
   Future<void> _initCamera() async {
     try {
       final cameras = await availableCameras();
@@ -88,17 +95,128 @@ class _BillingScreenState extends State<BillingScreen> {
 
     if (items.isEmpty) return;
 
-    await FirestoreService.bills.add({
+    final createdAt = Timestamp.now();
+    final itemCount = items.fold<int>(0, (sum, item) => sum + _asInt(item['qty']));
+    final total = items.fold<int>(0, (sum, item) => sum + _asInt(item['qty']) * _asInt(item['price']));
+
+    final billRef = await FirestoreService.bills.add({
       'items': items,
-      'itemCount': items.fold<int>(0, (sum, item) => sum + _asInt(item['qty'])),
-      'total': items.fold<int>(0, (sum, item) => sum + _asInt(item['qty']) * _asInt(item['price'])),
-      'createdAt': Timestamp.now(),
+      'itemCount': itemCount,
+      'total': total,
+      'createdAt': createdAt,
     });
 
     if (mounted) {
       setState(cart.clear);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bill generated and saved')));
+      _showBillPreview(
+        billNumber: billRef.id.substring(0, 8).toUpperCase(),
+        createdAt: createdAt.toDate(),
+        itemCount: itemCount,
+        total: total,
+        items: items,
+      );
     }
+  }
+
+  Future<void> _showBillPreview({
+    required String billNumber,
+    required DateTime createdAt,
+    required int itemCount,
+    required int total,
+    required List<Map<String, dynamic>> items,
+  }) {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.8,
+          minChildSize: 0.6,
+          maxChildSize: 0.95,
+          builder: (context, scrollController) {
+            return Container(
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: ListView(
+                controller: scrollController,
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
+                children: [
+                  const Center(
+                    child: Text(
+                      'Invoice / Bill',
+                      style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text('Bill No: $billNumber'),
+                  Text('Date: ${_formatDateTime(createdAt)}'),
+                  const Divider(height: 30),
+                  ...items.map((item) {
+                    final qty = _asInt(item['qty']);
+                    final price = _asInt(item['price']);
+                    final amount = qty * price;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              item['name']?.toString() ?? 'Unnamed Item',
+                              style: const TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                          Text('$qty x ₹$price'),
+                          const SizedBox(width: 12),
+                          Text(
+                            '₹$amount',
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                  const Divider(height: 30),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Total Items'),
+                      Text('$itemCount'),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Grand Total',
+                        style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                      ),
+                      Text(
+                        '₹$total',
+                        style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Done'),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   @override
