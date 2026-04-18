@@ -1,6 +1,7 @@
 import 'package:camera/camera.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../models/kirana_detection.dart';
 import '../services/firestore_service.dart';
@@ -16,6 +17,7 @@ class ScanScreen extends StatefulWidget {
 class _ScanScreenState extends State<ScanScreen> {
   final Map<String, int> scannedQty = {};
   final KiranaVisionAgent _visionAgent = KiranaVisionAgent();
+  final ImagePicker _imagePicker = ImagePicker();
 
   CameraController? _cameraController;
   bool _isCameraLoading = true;
@@ -74,20 +76,57 @@ class _ScanScreenState extends State<ScanScreen> {
   Future<void> _analyzeFrame(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) async {
     if (_isAnalyzing || _cameraController == null || !_cameraController!.value.isInitialized) return;
 
+    try {
+      final image = await _cameraController!.takePicture();
+      await _analyzeImagePath(image.path, docs, emptyMessage: 'No known kirana item detected. Try better lighting or angle.');
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _scanMessage = 'Frame analysis failed. Please retry.';
+      });
+    }
+  }
+
+  Future<void> _analyzeUploadedImage(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) async {
+    if (_isAnalyzing) return;
+
+    try {
+      final selectedImage = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 90,
+      );
+
+      if (selectedImage == null) return;
+
+      await _analyzeImagePath(selectedImage.path, docs, emptyMessage: 'No known kirana item detected. Try another image.');
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _scanMessage = 'Image upload failed. Please retry.';
+      });
+    }
+  }
+
+  Future<void> _analyzeImagePath(
+    String imagePath,
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs, {
+    required String emptyMessage,
+  }) async {
+    if (_isAnalyzing) return;
+
     setState(() {
       _isAnalyzing = true;
-      _scanMessage = 'Analyzing frame with kirana LLM agent...';
+      _scanMessage = 'Analyzing image with kirana LLM agent...';
     });
 
     try {
-      final image = await _cameraController!.takePicture();
       final inventoryByName = {
         for (final doc in docs)
           (doc.data()['name'] ?? '').toString().toLowerCase().trim(): doc,
       };
 
       final detections = await _visionAgent.analyzeImage(
-        imagePath: image.path,
+        imagePath: imagePath,
         inventoryNames: docs.map((d) => (d.data()['name'] ?? '').toString()).toList(),
       );
 
@@ -95,14 +134,12 @@ class _ScanScreenState extends State<ScanScreen> {
 
       if (!mounted) return;
       setState(() {
-        _scanMessage = detections.isEmpty
-            ? 'No known kirana item detected. Try better lighting or angle.'
-            : 'Detected ${detections.length} item(s). Review quantities below.';
+        _scanMessage = detections.isEmpty ? emptyMessage : 'Detected ${detections.length} item(s). Review quantities below.';
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
-        _scanMessage = 'Frame analysis failed. Please retry.';
+        _scanMessage = 'Image analysis failed. Please retry.';
       });
     } finally {
       if (mounted) {
@@ -204,13 +241,33 @@ class _ScanScreenState extends State<ScanScreen> {
                                   label: Text(_isAnalyzing ? 'Analyzing...' : 'Analyze Frame'),
                                 ),
                               ),
+                              Positioned(
+                                top: 10,
+                                right: 10,
+                                child: ElevatedButton.icon(
+                                  onPressed: docs.isEmpty || _isAnalyzing ? null : () => _analyzeUploadedImage(docs),
+                                  icon: const Icon(Icons.upload_file),
+                                  label: const Text('Upload from Device'),
+                                ),
+                              ),
                             ],
                           )
                         : Center(
-                            child: Text(
-                              _scanMessage ?? 'Camera unavailable',
-                              style: const TextStyle(color: Colors.white70),
-                              textAlign: TextAlign.center,
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  _scanMessage ?? 'Camera unavailable',
+                                  style: const TextStyle(color: Colors.white70),
+                                  textAlign: TextAlign.center,
+                                ),
+                                const SizedBox(height: 8),
+                                ElevatedButton.icon(
+                                  onPressed: docs.isEmpty || _isAnalyzing ? null : () => _analyzeUploadedImage(docs),
+                                  icon: const Icon(Icons.upload_file),
+                                  label: const Text('Upload from Device'),
+                                ),
+                              ],
                             ),
                           ),
               ),
