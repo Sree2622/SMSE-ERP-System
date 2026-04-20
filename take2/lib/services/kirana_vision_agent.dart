@@ -1,14 +1,28 @@
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:flutter/services.dart';
+import 'package:google_mlkit_image_labeling/google_mlkit_image_labeling.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 
 import '../models/kirana_detection.dart';
 
 class KiranaVisionAgent {
-  KiranaVisionAgent({http.Client? client}) : _client = client ?? http.Client();
+  KiranaVisionAgent({
+    http.Client? client,
+    String localModelPath = _defaultLocalModelPath,
+  })  : _client = client ?? http.Client(),
+        _localModelPath = localModelPath;
+
+  static const String _defaultLocalModelPath = String.fromEnvironment(
+    'KIRANA_TFLITE_MODEL_PATH',
+    defaultValue: 'assets/ml/kirana_brands.tflite',
+  );
 
   final http.Client _client;
+  final String _localModelPath;
 
   static const String _endpoint = String.fromEnvironment('KIRANA_LLM_ENDPOINT');
   static const List<String> _knownKiranaItems = [
@@ -45,15 +59,186 @@ class KiranaVisionAgent {
     required String imagePath,
     required List<String> inventoryNames,
   }) async {
+    final localModelDetections = await _analyzeUsingLocalModel(imagePath, inventoryNames);
+    if (localModelDetections.isNotEmpty) return localModelDetections;
+
+    final baseModelDetections = await _analyzeUsingBaseLabeler(imagePath, inventoryNames);
+    if (baseModelDetections.isNotEmpty) return baseModelDetections;
+
     if (_endpoint.isNotEmpty) {
       final cloudDetections = await _analyzeUsingEndpoint(imagePath, inventoryNames);
       if (cloudDetections.isNotEmpty) return cloudDetections;
     }
 
-    final localDetections = await _analyzeOnDevice(imagePath, inventoryNames);
-    if (localDetections.isNotEmpty) return localDetections;
+    final ocrDetections = await _analyzeOnDevice(imagePath, inventoryNames);
+    if (ocrDetections.isNotEmpty) return ocrDetections;
 
     return _fallbackInventoryDetections(inventoryNames);
+  }
+
+
+  Future<List<KiranaDetection>> _analyzeUsingLocalModel(
+    String imagePath,
+    List<String> inventoryNames,
+  ) async {
+    if (inventoryNames.isEmpty || _localModelPath.trim().isEmpty) return [];
+
+    final resolvedModelPath = await _resolveModelPath(_localModelPath);
+    if (resolvedModelPath == null) return [];
+
+    final options = LocalLabelerOptions(
+      modelPath: resolvedModelPath,
+      confidenceThreshold: 0.55,
+      maxCount: 6,
+    );
+
+    final labeler = ImageLabeler(options: options);
+
+    try {
+      final labels = await labeler.processImage(InputImage.fromFilePath(imagePath));
+      if (labels.isEmpty) return [];
+
+      final detections = <KiranaDetection>[];
+      final seen = <String>{};
+
+      for (final label in labels) {
+        final inventoryMatch = _matchLabelToInventory(label.label, inventoryNames);
+        if (inventoryMatch == null) continue;
+
+        final normalized = inventoryMatch.toLowerCase();
+        if (!seen.add(normalized)) continue;
+
+        detections.add(
+          KiranaDetection(
+            label: inventoryMatch,
+            confidence: label.confidence.clamp(0.0, 0.99).toDouble(),
+            suggestedQuantity: 1,
+          ),
+        );
+      }
+
+      detections.sort((a, b) => b.confidence.compareTo(a.confidence));
+      return detections;
+    } catch (_) {
+      return [];
+    } finally {
+      labeler.close();
+    }
+  }
+
+  String? _matchLabelToInventory(String modelLabel, List<String> inventoryNames) {
+    final normalizedLabel = modelLabel.toLowerCase().trim();
+    if (normalizedLabel.isEmpty) return null;
+
+    String? bestMatch;
+    double bestScore = 0;
+
+    for (final inventoryItem in inventoryNames) {
+      final normalizedItem = inventoryItem.toLowerCase().trim();
+      if (normalizedItem.isEmpty) continue;
+
+      if (normalizedItem == normalizedLabel ||
+          normalizedItem.contains(normalizedLabel) ||
+          normalizedLabel.contains(normalizedItem)) {
+        return inventoryItem;
+      }
+
+      final parts = normalizedItem
+          .split(RegExp(r'[^a-z0-9]+'))
+          .where((part) => part.length >= 3)
+          .toList();
+      if (parts.isEmpty) continue;
+
+      final tokenHits = parts.where(normalizedLabel.contains).length;
+      if (tokenHits > 0) {
+        final score = tokenHits / parts.length;
+        if (score > bestScore) {
+          bestScore = score;
+          bestMatch = inventoryItem;
+        }
+      }
+
+      final closeMatch = parts.any(
+        (part) => _levenshteinDistance(part, normalizedLabel) <= 2,
+      );
+      if (closeMatch && bestScore < 0.65) {
+        bestScore = 0.65;
+        bestMatch = inventoryItem;
+      }
+    }
+
+    return bestScore >= 0.55 ? bestMatch : null;
+  }
+
+
+
+  Future<String?> _resolveModelPath(String configuredPath) async {
+    final trimmed = configuredPath.trim();
+    if (trimmed.isEmpty) return null;
+
+    final directFile = File(trimmed);
+    if (await directFile.exists()) return directFile.path;
+
+    if (!trimmed.startsWith('assets/')) return null;
+
+    try {
+      final modelData = await rootBundle.load(trimmed);
+      final tempDir = await getTemporaryDirectory();
+      final modelFile = File(
+        '${tempDir.path}/${trimmed.split('/').last}',
+      );
+
+      if (!await modelFile.exists()) {
+        await modelFile.writeAsBytes(
+          modelData.buffer.asUint8List(),
+          flush: true,
+        );
+      }
+
+      return modelFile.path;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<List<KiranaDetection>> _analyzeUsingBaseLabeler(
+    String imagePath,
+    List<String> inventoryNames,
+  ) async {
+    if (inventoryNames.isEmpty) return [];
+
+    final labeler = ImageLabeler(options: ImageLabelerOptions(confidenceThreshold: 0.6));
+
+    try {
+      final labels = await labeler.processImage(InputImage.fromFilePath(imagePath));
+      if (labels.isEmpty) return [];
+
+      final detections = <KiranaDetection>[];
+      final seen = <String>{};
+
+      for (final label in labels) {
+        final inventoryMatch = _matchLabelToInventory(label.label, inventoryNames);
+        if (inventoryMatch == null) continue;
+
+        final normalized = inventoryMatch.toLowerCase();
+        if (!seen.add(normalized)) continue;
+
+        detections.add(
+          KiranaDetection(
+            label: inventoryMatch,
+            confidence: (label.confidence * 0.85).clamp(0.0, 0.9).toDouble(),
+            suggestedQuantity: 1,
+          ),
+        );
+      }
+
+      detections.sort((a, b) => b.confidence.compareTo(a.confidence));
+      return detections;
+    } catch (_) {
+      return [];
+    } finally {
+      labeler.close();
+    }
   }
 
   Future<List<KiranaDetection>> _analyzeUsingEndpoint(
