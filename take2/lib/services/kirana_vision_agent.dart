@@ -38,6 +38,7 @@ class KiranaVisionAgent {
     'paneer',
     'soap bar',
     'detergent powder',
+    'sprite',
   ];
 
   Future<List<KiranaDetection>> analyzeImage({
@@ -92,6 +93,10 @@ class KiranaVisionAgent {
       final recognizedText = await recognizer.processImage(InputImage.fromFilePath(imagePath));
       final textBlob = recognizedText.text.toLowerCase();
       if (textBlob.trim().isEmpty) return [];
+      final textTokens = textBlob
+          .split(RegExp(r'[^a-z0-9]+'))
+          .where((token) => token.length >= 4)
+          .toList();
 
       final detections = <KiranaDetection>[];
       for (final inventoryItem in inventoryNames) {
@@ -113,6 +118,18 @@ class KiranaVisionAgent {
         if (hasTokenMatch) {
           detections.add(
             KiranaDetection(label: inventoryItem, confidence: 0.72, suggestedQuantity: 1),
+          );
+          continue;
+        }
+
+        final hasCloseTokenMatch = parts.any(
+          (part) => textTokens.any(
+            (textToken) => _levenshteinDistance(part, textToken) <= 1,
+          ),
+        );
+        if (hasCloseTokenMatch) {
+          detections.add(
+            KiranaDetection(label: inventoryItem, confidence: 0.64, suggestedQuantity: 1),
           );
         }
 
@@ -142,5 +159,30 @@ class KiranaVisionAgent {
     }
 
     return matches;
+  }
+
+  int _levenshteinDistance(String source, String target) {
+    if (source == target) return 0;
+    if (source.isEmpty) return target.length;
+    if (target.isEmpty) return source.length;
+
+    var previous = List<int>.generate(target.length + 1, (index) => index);
+    for (var i = 0; i < source.length; i++) {
+      final current = List<int>.filled(target.length + 1, 0);
+      current[0] = i + 1;
+
+      for (var j = 0; j < target.length; j++) {
+        final substitutionCost = source[i] == target[j] ? 0 : 1;
+        current[j + 1] = [
+          current[j] + 1,
+          previous[j + 1] + 1,
+          previous[j] + substitutionCost,
+        ].reduce((a, b) => a < b ? a : b);
+      }
+
+      previous = current;
+    }
+
+    return previous[target.length];
   }
 }
