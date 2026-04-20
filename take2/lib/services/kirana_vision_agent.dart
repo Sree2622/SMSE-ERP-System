@@ -10,8 +10,6 @@ class KiranaVisionAgent {
   static const _laysLabel = 'Lays packet';
   static const List<String> _preferredModelAssetPaths = [
     'assets/ml/model_quant.tflite',
-    'assets/ml/model.tflite',
-    'assets/ml/model_unquant.tflite',
   ];
   static const _labelsAssetPath = 'assets/ml/labels.txt';
 
