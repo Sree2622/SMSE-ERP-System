@@ -1,6 +1,6 @@
 import 'dart:convert';
-import 'dart:io';
 
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/kirana_detection.dart';
@@ -49,6 +49,9 @@ class KiranaVisionAgent {
       if (cloudDetections.isNotEmpty) return cloudDetections;
     }
 
+    final localDetections = await _analyzeOnDevice(imagePath, inventoryNames);
+    if (localDetections.isNotEmpty) return localDetections;
+
     return _fallbackInventoryDetections(inventoryNames);
   }
 
@@ -75,6 +78,53 @@ class KiranaVisionAgent {
         .map(KiranaDetection.fromJson)
         .where((item) => item.label.isNotEmpty)
         .toList();
+  }
+
+  Future<List<KiranaDetection>> _analyzeOnDevice(
+    String imagePath,
+    List<String> inventoryNames,
+  ) async {
+    if (inventoryNames.isEmpty) return [];
+
+    final recognizer = TextRecognizer(script: TextRecognitionScript.latin);
+
+    try {
+      final recognizedText = await recognizer.processImage(InputImage.fromFilePath(imagePath));
+      final textBlob = recognizedText.text.toLowerCase();
+      if (textBlob.trim().isEmpty) return [];
+
+      final detections = <KiranaDetection>[];
+      for (final inventoryItem in inventoryNames) {
+        final normalizedItem = inventoryItem.toLowerCase().trim();
+        if (normalizedItem.isEmpty) continue;
+
+        if (textBlob.contains(normalizedItem)) {
+          detections.add(
+            KiranaDetection(label: inventoryItem, confidence: 0.9, suggestedQuantity: 1),
+          );
+          continue;
+        }
+
+        final parts = normalizedItem
+            .split(RegExp(r'[^a-z0-9]+'))
+            .where((part) => part.length >= 4)
+            .toList();
+        final hasTokenMatch = parts.any(textBlob.contains);
+        if (hasTokenMatch) {
+          detections.add(
+            KiranaDetection(label: inventoryItem, confidence: 0.72, suggestedQuantity: 1),
+          );
+        }
+
+        if (detections.length >= 5) break;
+      }
+
+      return detections;
+    } catch (_) {
+      return [];
+    } finally {
+      recognizer.close();
+    }
   }
 
   List<KiranaDetection> _fallbackInventoryDetections(List<String> inventoryNames) {
