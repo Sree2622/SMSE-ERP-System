@@ -1,38 +1,26 @@
-# Kirana TFLite model
+# Kirana Vision model assets
 
-Expected runtime model path:
+Place your TensorFlow Lite model files in this folder:
 
-- `assets/ml/kirana_brands.tflite`
+- `assets/ml/model_unquant.tflite`
+- `assets/ml/labels.txt`
 
-## Public model source (Sprite + Lays classes)
+`KiranaVisionAgent` now attempts to load this local custom model first. If the model file is missing or fails to load, the app automatically falls back to the default ML Kit base labeler.
 
-This project is wired to use a Roboflow public model from:
+## labels.txt format
 
-- Workspace: `rows-and-cols-of-vending-machines`
-- Project: `vendingitems`
-- Version: `1`
+One class label per line, for example:
 
-The dataset listing for that model includes `sprite` plus multiple `lays` classes
-(`Lays Classic`, `Lays Stax Original`, etc.).
-
-## Download command
-
-From `take2/` run:
-
-```bash
-export ROBOFLOW_API_KEY="<your_api_key>"
-./tool/download_public_kirana_model.sh
+```txt
+sprite bottle
+lays classic
 ```
 
-This writes the model to:
-
-- `assets/ml/kirana_brands.tflite`
-
-After downloading, rebuild the app so Flutter bundles the model asset.
+These labels are used as hints when mapping model predictions to item names from your inventory.
 
 ## Fallback order in app
 
-1. Custom local TFLite model (`kirana_brands.tflite`)
+1. Custom local TFLite model (`model_unquant.tflite`)
 2. ML Kit base image labeling
 3. Cloud endpoint (`KIRANA_LLM_ENDPOINT`)
 4. OCR matching

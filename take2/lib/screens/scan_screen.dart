@@ -232,6 +232,7 @@ class _ScanScreenState extends State<ScanScreen> {
   @override
   void dispose() {
     _cameraController?.dispose();
+    _visionAgent.dispose();
     super.dispose();
   }
 

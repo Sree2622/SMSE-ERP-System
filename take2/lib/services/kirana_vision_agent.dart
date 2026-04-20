@@ -1,10 +1,15 @@
+import 'dart:io';
+import 'package:flutter/services.dart';
 import 'package:google_mlkit_image_labeling/google_mlkit_image_labeling.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../models/kirana_detection.dart';
 
 class KiranaVisionAgent {
   static const _spriteLabel = 'Sprite bottle';
   static const _laysLabel = 'Lays packet';
+  static const _customModelAssetPath = 'assets/ml/model_unquant.tflite';
+  static const _labelsAssetPath = 'assets/ml/labels.txt';
 
   static const List<String> _spriteKeywords = [
     'sprite',
@@ -21,69 +26,221 @@ class KiranaVisionAgent {
     'packet',
   ];
 
+  ImageLabeler? _cachedLabeler;
+  bool _customModelInitAttempted = false;
+  List<String> _labelHints = const [];
+
   Future<List<KiranaDetection>> analyzeImage({
     required String imagePath,
     required List<String> inventoryNames,
   }) async {
-    final labeler = ImageLabeler(
-      options: ImageLabelerOptions(confidenceThreshold: 0.6),
-    );
+    final labeler = await _getOrCreateLabeler();
 
     try {
       final labels = await labeler.processImage(InputImage.fromFilePath(imagePath));
       if (labels.isEmpty) return [];
 
-      final canReturnSprite = _hasInventoryMatch(inventoryNames, _spriteLabel);
-      final canReturnLays = _hasInventoryMatch(inventoryNames, _laysLabel);
-
-      double spriteConfidence = 0;
-      double laysConfidence = 0;
+      final detectionsByLabel = <String, KiranaDetection>{};
 
       for (final label in labels) {
-        final normalized = label.label.toLowerCase().trim();
+        final rawLabel = label.label.trim();
+        if (rawLabel.isEmpty) continue;
 
-        if (canReturnSprite && _containsKeyword(normalized, _spriteKeywords)) {
-          if (label.confidence > spriteConfidence) {
-            spriteConfidence = label.confidence;
-          }
-        }
-
-        if (canReturnLays && _containsKeyword(normalized, _laysKeywords)) {
-          if (label.confidence > laysConfidence) {
-            laysConfidence = label.confidence;
-          }
-        }
-      }
-
-      final detections = <KiranaDetection>[];
-
-      if (spriteConfidence > 0) {
-        detections.add(
-          KiranaDetection(
-            label: _spriteLabel,
-            confidence: spriteConfidence.clamp(0.0, 0.99).toDouble(),
-            suggestedQuantity: 1,
-          ),
+        final mappedInventoryLabel = _findBestInventoryMatch(
+          candidate: rawLabel,
+          inventoryNames: inventoryNames,
         );
-      }
 
-      if (laysConfidence > 0) {
-        detections.add(
-          KiranaDetection(
-            label: _laysLabel,
-            confidence: laysConfidence.clamp(0.0, 0.99).toDouble(),
+        if (mappedInventoryLabel == null) continue;
+
+        final confidence = label.confidence.clamp(0.0, 0.99).toDouble();
+        final existing = detectionsByLabel[mappedInventoryLabel];
+
+        if (existing == null || confidence > existing.confidence) {
+          detectionsByLabel[mappedInventoryLabel] = KiranaDetection(
+            label: mappedInventoryLabel,
+            confidence: confidence,
             suggestedQuantity: 1,
-          ),
-        );
+          );
+        }
       }
 
-      detections.sort((a, b) => b.confidence.compareTo(a.confidence));
+      if (detectionsByLabel.isEmpty) {
+        final fallback = _fallbackKeywordDetections(labels, inventoryNames);
+        fallback.sort((a, b) => b.confidence.compareTo(a.confidence));
+        return fallback;
+      }
+
+      final detections = detectionsByLabel.values.toList()
+        ..sort((a, b) => b.confidence.compareTo(a.confidence));
+
       return detections;
     } catch (_) {
       return [];
-    } finally {
-      labeler.close();
     }
+  }
+
+  Future<ImageLabeler> _getOrCreateLabeler() async {
+    if (_cachedLabeler != null) return _cachedLabeler!;
+
+    if (!_customModelInitAttempted) {
+      _customModelInitAttempted = true;
+
+      final modelPath = await _copyAssetToLocalPath(_customModelAssetPath);
+      if (modelPath != null) {
+        _labelHints = await _tryLoadLabelHints();
+        _cachedLabeler = ImageLabeler(
+          options: LocalLabelerOptions(
+            modelPath: modelPath,
+            confidenceThreshold: 0.5,
+            maxCount: 10,
+          ),
+        );
+        return _cachedLabeler!;
+      }
+    }
+
+    _cachedLabeler = ImageLabeler(
+      options: ImageLabelerOptions(confidenceThreshold: 0.6),
+    );
+    return _cachedLabeler!;
+  }
+
+  Future<String?> _copyAssetToLocalPath(String assetPath) async {
+    try {
+      final data = await rootBundle.load(assetPath);
+      final dir = await getApplicationSupportDirectory();
+      final fileName = assetPath.split('/').last;
+      final targetPath = '${dir.path}/$fileName';
+      final file = File(targetPath);
+
+      if (!await file.exists()) {
+        final bytes = data.buffer.asUint8List();
+        await file.writeAsBytes(bytes, flush: true);
+      }
+
+      return targetPath;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<List<String>> _tryLoadLabelHints() async {
+    try {
+      final raw = await rootBundle.loadString(_labelsAssetPath);
+      return raw
+          .split(RegExp(r'\r?\n'))
+          .map((line) => line.trim().toLowerCase())
+          .where((line) => line.isNotEmpty)
+          .toList(growable: false);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  String? _findBestInventoryMatch({
+    required String candidate,
+    required List<String> inventoryNames,
+  }) {
+    final normalizedCandidate = candidate.toLowerCase().trim();
+    if (normalizedCandidate.isEmpty) return null;
+
+    final allowedByHints = _labelHints.isEmpty ||
+        _labelHints.any(
+          (hint) => normalizedCandidate == hint || normalizedCandidate.contains(hint),
+        );
+
+    if (!allowedByHints) return null;
+
+    String? best;
+    var bestScore = 0;
+
+    final candidateTokens = _tokenize(normalizedCandidate);
+
+    for (final rawInventoryName in inventoryNames) {
+      final inventoryName = rawInventoryName.toLowerCase().trim();
+      if (inventoryName.isEmpty) continue;
+
+      if (inventoryName == normalizedCandidate ||
+          inventoryName.contains(normalizedCandidate) ||
+          normalizedCandidate.contains(inventoryName)) {
+        return rawInventoryName;
+      }
+
+      final inventoryTokens = _tokenize(inventoryName);
+      var score = 0;
+
+      for (final token in candidateTokens) {
+        if (inventoryTokens.contains(token) || inventoryName.contains(token)) {
+          score++;
+        }
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = rawInventoryName;
+      }
+    }
+
+    return bestScore > 0 ? best : null;
+  }
+
+  List<String> _tokenize(String value) {
+    return value
+        .split(RegExp(r'[^a-z0-9]+'))
+        .where((token) => token.length >= 3)
+        .toList(growable: false);
+  }
+
+  List<KiranaDetection> _fallbackKeywordDetections(
+    List<ImageLabel> labels,
+    List<String> inventoryNames,
+  ) {
+    final canReturnSprite = _hasInventoryMatch(inventoryNames, _spriteLabel);
+    final canReturnLays = _hasInventoryMatch(inventoryNames, _laysLabel);
+
+    double spriteConfidence = 0;
+    double laysConfidence = 0;
+
+    for (final label in labels) {
+      final normalized = label.label.toLowerCase().trim();
+
+      if (canReturnSprite && _containsKeyword(normalized, _spriteKeywords)) {
+        if (label.confidence > spriteConfidence) {
+          spriteConfidence = label.confidence;
+        }
+      }
+
+      if (canReturnLays && _containsKeyword(normalized, _laysKeywords)) {
+        if (label.confidence > laysConfidence) {
+          laysConfidence = label.confidence;
+        }
+      }
+    }
+
+    final detections = <KiranaDetection>[];
+
+    if (spriteConfidence > 0) {
+      detections.add(
+        KiranaDetection(
+          label: _spriteLabel,
+          confidence: spriteConfidence.clamp(0.0, 0.99).toDouble(),
+          suggestedQuantity: 1,
+        ),
+      );
+    }
+
+    if (laysConfidence > 0) {
+      detections.add(
+        KiranaDetection(
+          label: _laysLabel,
+          confidence: laysConfidence.clamp(0.0, 0.99).toDouble(),
+          suggestedQuantity: 1,
+        ),
+      );
+    }
+
+    return detections;
   }
 
   bool _hasInventoryMatch(List<String> inventoryNames, String target) {
@@ -96,5 +253,10 @@ class KiranaVisionAgent {
       if (value.contains(keyword)) return true;
     }
     return false;
+  }
+
+  Future<void> dispose() async {
+    await _cachedLabeler?.close();
+    _cachedLabeler = null;
   }
 }
