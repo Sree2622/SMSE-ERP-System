@@ -80,15 +80,14 @@ class KiranaVisionAgent {
         candidate: rawLabel,
         inventoryNames: inventoryNames,
       );
-
-      if (mappedInventoryLabel == null) continue;
+      final outputLabel = mappedInventoryLabel ?? rawLabel;
 
       final confidence = label.confidence.clamp(0.0, 0.99).toDouble();
-      final existing = detectionsByLabel[mappedInventoryLabel];
+      final existing = detectionsByLabel[outputLabel];
 
       if (existing == null || confidence > existing.confidence) {
-        detectionsByLabel[mappedInventoryLabel] = KiranaDetection(
-          label: mappedInventoryLabel,
+        detectionsByLabel[outputLabel] = KiranaDetection(
+          label: outputLabel,
           confidence: confidence,
           suggestedQuantity: 1,
         );
