@@ -23,6 +23,7 @@ class _ScanScreenState extends State<ScanScreen> {
   bool _isCameraLoading = true;
   bool _isAnalyzing = false;
   String? _scanMessage;
+  List<KiranaDetection> _lastDetections = const [];
 
   @override
   void initState() {
@@ -130,11 +131,19 @@ class _ScanScreenState extends State<ScanScreen> {
         inventoryNames: docs.map((d) => (d.data()['name'] ?? '').toString()).toList(),
       );
 
-      _applyDetections(detections, inventoryByName);
+      final mappedCount = _applyDetections(detections, inventoryByName);
 
       if (!mounted) return;
       setState(() {
-        _scanMessage = detections.isEmpty ? emptyMessage : 'Detected ${detections.length} item(s). Review quantities below.';
+        _lastDetections = detections;
+        if (detections.isEmpty) {
+          _scanMessage = emptyMessage;
+        } else {
+          final output = detections
+              .map((d) => '${d.label} (${(d.confidence * 100).toStringAsFixed(0)}%)')
+              .join(', ');
+          _scanMessage = 'Classified output: $output • Mapped to stock: $mappedCount/${detections.length}';
+        }
       });
     } catch (_) {
       if (!mounted) return;
@@ -150,16 +159,19 @@ class _ScanScreenState extends State<ScanScreen> {
     }
   }
 
-  void _applyDetections(
+  int _applyDetections(
     List<KiranaDetection> detections,
     Map<String, QueryDocumentSnapshot<Map<String, dynamic>>> inventoryByName,
   ) {
-    if (detections.isEmpty) return;
+    if (detections.isEmpty) return 0;
 
     final updates = <String, int>{};
+    var mappedCount = 0;
+
     for (final detection in detections) {
       final doc = _resolveInventoryDoc(detection.label, inventoryByName);
       if (doc == null) continue;
+      mappedCount++;
 
       final existing = scannedQty[doc.id] ?? 0;
       updates[doc.id] = existing + detection.suggestedQuantity;
@@ -170,6 +182,8 @@ class _ScanScreenState extends State<ScanScreen> {
         scannedQty.addAll(updates);
       });
     }
+
+    return mappedCount;
   }
 
   QueryDocumentSnapshot<Map<String, dynamic>>? _resolveInventoryDoc(
@@ -314,6 +328,25 @@ class _ScanScreenState extends State<ScanScreen> {
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: Text(_scanMessage!, style: const TextStyle(color: Colors.black54)),
+                  ),
+                ),
+              if (_lastDetections.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: _lastDetections
+                          .map(
+                            (detection) => Chip(
+                              label: Text('${detection.label} ${(detection.confidence * 100).toStringAsFixed(0)}%'),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                          )
+                          .toList(growable: false),
+                    ),
                   ),
                 ),
               Padding(
