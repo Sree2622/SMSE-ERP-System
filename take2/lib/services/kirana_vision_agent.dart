@@ -62,6 +62,28 @@ class KiranaVisionAgent {
     }
   }
 
+  Future<List<KiranaDetection>> analyzeImageRaw({
+    required String imagePath,
+  }) async {
+    final labeler = await _getOrCreateLabeler();
+    final labels = await labeler.processImage(InputImage.fromFilePath(imagePath));
+    if (labels.isEmpty) return const [];
+
+    final detections = labels
+        .where((label) => label.label.trim().isNotEmpty)
+        .map(
+          (label) => KiranaDetection(
+            label: label.label.trim(),
+            confidence: label.confidence.clamp(0.0, 0.99).toDouble(),
+            suggestedQuantity: 1,
+          ),
+        )
+        .toList(growable: false)
+      ..sort((a, b) => b.confidence.compareTo(a.confidence));
+
+    return detections;
+  }
+
   Future<List<KiranaDetection>> _detectFromLabeler({
     required ImageLabeler labeler,
     required String imagePath,

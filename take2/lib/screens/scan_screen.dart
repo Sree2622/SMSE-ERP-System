@@ -24,6 +24,8 @@ class _ScanScreenState extends State<ScanScreen> {
   bool _isAnalyzing = false;
   String? _scanMessage;
   List<KiranaDetection> _lastDetections = const [];
+  bool _isRawLabelLoading = false;
+  String? _rawLabelResult;
 
   @override
   void initState() {
@@ -154,6 +156,49 @@ class _ScanScreenState extends State<ScanScreen> {
       if (mounted) {
         setState(() {
           _isAnalyzing = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _runRawTfliteLabelTest() async {
+    if (_isRawLabelLoading) return;
+
+    try {
+      final selectedImage = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 90,
+      );
+
+      if (selectedImage == null) return;
+
+      setState(() {
+        _isRawLabelLoading = true;
+        _rawLabelResult = 'Reading TFLite labels...';
+      });
+
+      final detections = await _visionAgent.analyzeImageRaw(imagePath: selectedImage.path);
+
+      if (!mounted) return;
+      setState(() {
+        if (detections.isEmpty) {
+          _rawLabelResult = 'No matching prediction from TFLite model.';
+        } else {
+          _rawLabelResult = detections
+              .take(5)
+              .map((d) => '${d.label} (${(d.confidence * 100).toStringAsFixed(0)}%)')
+              .join('\n');
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _rawLabelResult = 'TFLite label read failed.';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRawLabelLoading = false;
         });
       }
     }
@@ -349,6 +394,43 @@ class _ScanScreenState extends State<ScanScreen> {
                     ),
                   ),
                 ),
+              Container(
+                margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Standalone TFLite Label Widget',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Upload an image to print raw label output only (no inventory matching).',
+                      style: TextStyle(color: Colors.black54),
+                    ),
+                    const SizedBox(height: 10),
+                    ElevatedButton.icon(
+                      onPressed: _isRawLabelLoading ? null : _runRawTfliteLabelTest,
+                      icon: _isRawLabelLoading
+                          ? const SizedBox.square(
+                              dimension: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.image_search),
+                      label: Text(_isRawLabelLoading ? 'Checking...' : 'Upload for TFLite Label'),
+                    ),
+                    if (_rawLabelResult != null) ...[
+                      const SizedBox(height: 8),
+                      Text(_rawLabelResult!, style: const TextStyle(fontSize: 13)),
+                    ],
+                  ],
+                ),
+              ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                 child: Row(
