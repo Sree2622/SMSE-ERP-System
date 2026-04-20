@@ -1,6 +1,6 @@
 import 'dart:convert';
-import 'dart:io';
 
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/kirana_detection.dart';
@@ -49,6 +49,9 @@ class KiranaVisionAgent {
       if (cloudDetections.isNotEmpty) return cloudDetections;
     }
 
+    final localDetections = await _analyzeOnDevice(imagePath, inventoryNames);
+    if (localDetections.isNotEmpty) return localDetections;
+
     return _fallbackInventoryDetections(inventoryNames);
   }
 
@@ -74,6 +77,97 @@ class KiranaVisionAgent {
         .whereType<Map<String, dynamic>>()
         .map(KiranaDetection.fromJson)
         .where((item) => item.label.isNotEmpty)
+        .toList();
+  }
+
+  Future<List<KiranaDetection>> _analyzeOnDevice(
+    String imagePath,
+    List<String> inventoryNames,
+  ) async {
+    if (inventoryNames.isEmpty) return [];
+
+    final recognizer = TextRecognizer(script: TextRecognitionScript.latin);
+
+    try {
+      final recognizedText = await recognizer.processImage(InputImage.fromFilePath(imagePath));
+      final textBlob = recognizedText.text.toLowerCase();
+      if (textBlob.trim().isEmpty) return [];
+
+      final normalizedBlob = _normalizeForContains(textBlob);
+      final lineCandidates = <String>{
+        for (final block in recognizedText.blocks)
+          for (final line in block.lines) _normalizeForContains(line.text),
+      }..removeWhere((line) => line.isEmpty);
+      final ocrTokens = _tokenize(textBlob).toSet();
+
+      final scoredDetections = <KiranaDetection>[];
+      for (final inventoryItem in inventoryNames) {
+        final confidence = _scoreInventoryMatch(
+          inventoryItem,
+          rawBlob: textBlob,
+          normalizedBlob: normalizedBlob,
+          lineCandidates: lineCandidates,
+          ocrTokens: ocrTokens,
+        );
+        if (confidence < 0.6) continue;
+
+        scoredDetections.add(
+          KiranaDetection(label: inventoryItem, confidence: confidence, suggestedQuantity: 1),
+        );
+      }
+
+      scoredDetections.sort((a, b) => b.confidence.compareTo(a.confidence));
+      return scoredDetections.take(5).toList();
+    } catch (_) {
+      return [];
+    } finally {
+      recognizer.close();
+    }
+  }
+
+  double _scoreInventoryMatch(
+    String inventoryItem, {
+    required String rawBlob,
+    required String normalizedBlob,
+    required Set<String> lineCandidates,
+    required Set<String> ocrTokens,
+  }) {
+    final normalizedItem = inventoryItem.toLowerCase().trim();
+    if (normalizedItem.isEmpty) return 0;
+
+    final normalizedInventory = _normalizeForContains(normalizedItem);
+    if (normalizedInventory.isEmpty) return 0;
+
+    if (rawBlob.contains(normalizedItem)) return 0.97;
+    if (normalizedBlob.contains(normalizedInventory)) return 0.93;
+    if (lineCandidates.any((line) => line.contains(normalizedInventory))) return 0.9;
+
+    final inventoryTokens = _tokenize(normalizedItem);
+    if (inventoryTokens.isEmpty) return 0;
+
+    final matchedTokens = inventoryTokens.where(ocrTokens.contains).length;
+    if (matchedTokens == 0) {
+      final primaryToken = inventoryTokens.first;
+      if (primaryToken.length >= 4 && normalizedBlob.contains(primaryToken)) return 0.64;
+      return 0;
+    }
+
+    final coverage = matchedTokens / inventoryTokens.length;
+    if (coverage >= 1) return 0.88;
+    if (coverage >= 0.67) return 0.78;
+    if (coverage >= 0.5) return 0.69;
+    return 0.62;
+  }
+
+  String _normalizeForContains(String input) {
+    return input.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '');
+  }
+
+  List<String> _tokenize(String input) {
+    return input
+        .toLowerCase()
+        .split(RegExp(r'[^a-z0-9]+'))
+        .where((token) => token.length >= 3)
         .toList();
   }
 

@@ -78,7 +78,11 @@ class _ScanScreenState extends State<ScanScreen> {
 
     try {
       final image = await _cameraController!.takePicture();
-      await _analyzeImagePath(image.path, docs, emptyMessage: 'No known kirana item detected. Try better lighting or angle.');
+      await _analyzeImagePath(
+        image.path,
+        docs,
+        emptyMessage: 'No known item detected. Keep product name text visible and retry.',
+      );
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -98,7 +102,11 @@ class _ScanScreenState extends State<ScanScreen> {
 
       if (selectedImage == null) return;
 
-      await _analyzeImagePath(selectedImage.path, docs, emptyMessage: 'No known kirana item detected. Try another image.');
+      await _analyzeImagePath(
+        selectedImage.path,
+        docs,
+        emptyMessage: 'No known item detected. Use a clearer image with visible product text.',
+      );
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -116,7 +124,7 @@ class _ScanScreenState extends State<ScanScreen> {
 
     setState(() {
       _isAnalyzing = true;
-      _scanMessage = 'Analyzing image with kirana LLM agent...';
+      _scanMessage = 'Analyzing image...';
     });
 
     try {
@@ -158,8 +166,7 @@ class _ScanScreenState extends State<ScanScreen> {
 
     final updates = <String, int>{};
     for (final detection in detections) {
-      final key = detection.label.toLowerCase().trim();
-      final doc = inventoryByName[key];
+      final doc = _resolveInventoryDoc(detection.label, inventoryByName);
       if (doc == null) continue;
 
       final existing = scannedQty[doc.id] ?? 0;
@@ -171,6 +178,43 @@ class _ScanScreenState extends State<ScanScreen> {
         scannedQty.addAll(updates);
       });
     }
+  }
+
+  QueryDocumentSnapshot<Map<String, dynamic>>? _resolveInventoryDoc(
+    String label,
+    Map<String, QueryDocumentSnapshot<Map<String, dynamic>>> inventoryByName,
+  ) {
+    final normalizedLabel = label.toLowerCase().trim();
+    if (normalizedLabel.isEmpty) return null;
+
+    final exact = inventoryByName[normalizedLabel];
+    if (exact != null) return exact;
+
+    final tokens = normalizedLabel
+        .split(RegExp(r'[^a-z0-9]+'))
+        .where((token) => token.length >= 3)
+        .toList();
+
+    QueryDocumentSnapshot<Map<String, dynamic>>? bestDoc;
+    var bestScore = 0;
+
+    for (final entry in inventoryByName.entries) {
+      final candidateName = entry.key;
+      if (candidateName.contains(normalizedLabel) || normalizedLabel.contains(candidateName)) {
+        return entry.value;
+      }
+
+      var score = 0;
+      for (final token in tokens) {
+        if (candidateName.contains(token)) score++;
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestDoc = entry.value;
+      }
+    }
+
+    return bestScore > 0 ? bestDoc : null;
   }
 
   Future<void> _saveScannedStock(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) async {

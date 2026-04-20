@@ -1,8 +1,11 @@
 import 'package:camera/camera.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
+import '../models/kirana_detection.dart';
 import '../services/firestore_service.dart';
+import '../services/kirana_vision_agent.dart';
 
 class BillingScreen extends StatefulWidget {
   const BillingScreen({super.key});
@@ -18,6 +21,10 @@ class _BillingScreenState extends State<BillingScreen> {
   final Map<String, int> cart = {};
   String? _selectedHistoryBillId;
   String _searchText = '';
+  bool _isAnalyzingImage = false;
+  String? _billingScanMessage;
+  final KiranaVisionAgent _visionAgent = KiranaVisionAgent();
+  final ImagePicker _imagePicker = ImagePicker();
 
   @override
   void initState() {
@@ -72,6 +79,139 @@ class _BillingScreenState extends State<BillingScreen> {
       sum += qty * price;
     }
     return sum;
+  }
+
+  Future<void> _analyzeBillFrame(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) async {
+    if (_isAnalyzingImage || _controller == null || !(_controller!.value.isInitialized)) return;
+
+    try {
+      final image = await _controller!.takePicture();
+      await _analyzeBillImagePath(
+        image.path,
+        docs,
+        emptyMessage: 'No known item detected. Keep product name text visible and retry.',
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _billingScanMessage = 'Frame analysis failed. Please retry.');
+    }
+  }
+
+  Future<void> _analyzeUploadedBillImage(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) async {
+    if (_isAnalyzingImage) return;
+
+    try {
+      final selectedImage = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 90,
+      );
+      if (selectedImage == null) return;
+
+      await _analyzeBillImagePath(
+        selectedImage.path,
+        docs,
+        emptyMessage: 'No known item detected. Use a clearer image with visible product text.',
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _billingScanMessage = 'Image upload failed. Please retry.');
+    }
+  }
+
+  Future<void> _analyzeBillImagePath(
+    String imagePath,
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs, {
+    required String emptyMessage,
+  }) async {
+    if (_isAnalyzingImage) return;
+
+    setState(() {
+      _isAnalyzingImage = true;
+      _billingScanMessage = 'Analyzing image...';
+    });
+
+    try {
+      final inventoryByName = {
+        for (final doc in docs)
+          (doc.data()['name'] ?? '').toString().toLowerCase().trim(): doc,
+      };
+
+      final detections = await _visionAgent.analyzeImage(
+        imagePath: imagePath,
+        inventoryNames: docs.map((d) => (d.data()['name'] ?? '').toString()).toList(),
+      );
+
+      _applyDetectionsToCart(detections, inventoryByName);
+
+      if (!mounted) return;
+      setState(() {
+        _billingScanMessage = detections.isEmpty
+            ? emptyMessage
+            : 'Detected ${detections.length} item(s). Review quantities below.';
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _billingScanMessage = 'Image analysis failed. Please retry.');
+    } finally {
+      if (!mounted) return;
+      setState(() => _isAnalyzingImage = false);
+    }
+  }
+
+  void _applyDetectionsToCart(
+    List<KiranaDetection> detections,
+    Map<String, QueryDocumentSnapshot<Map<String, dynamic>>> inventoryByName,
+  ) {
+    if (detections.isEmpty) return;
+
+    final updates = <String, int>{};
+    for (final detection in detections) {
+      final doc = _resolveInventoryDoc(detection.label, inventoryByName);
+      if (doc == null) continue;
+      final current = cart[doc.id] ?? 0;
+      updates[doc.id] = current + detection.suggestedQuantity;
+    }
+
+    if (updates.isNotEmpty) {
+      setState(() => cart.addAll(updates));
+    }
+  }
+
+  QueryDocumentSnapshot<Map<String, dynamic>>? _resolveInventoryDoc(
+    String label,
+    Map<String, QueryDocumentSnapshot<Map<String, dynamic>>> inventoryByName,
+  ) {
+    final normalizedLabel = label.toLowerCase().trim();
+    if (normalizedLabel.isEmpty) return null;
+
+    final exact = inventoryByName[normalizedLabel];
+    if (exact != null) return exact;
+
+    final tokens = normalizedLabel
+        .split(RegExp(r'[^a-z0-9]+'))
+        .where((token) => token.length >= 3)
+        .toList();
+
+    QueryDocumentSnapshot<Map<String, dynamic>>? bestDoc;
+    var bestScore = 0;
+
+    for (final entry in inventoryByName.entries) {
+      final candidateName = entry.key;
+      if (candidateName.contains(normalizedLabel) || normalizedLabel.contains(candidateName)) {
+        return entry.value;
+      }
+
+      var score = 0;
+      for (final token in tokens) {
+        if (candidateName.contains(token)) score++;
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestDoc = entry.value;
+      }
+    }
+
+    return bestScore > 0 ? bestDoc : null;
   }
 
   Future<void> _generateBill(List<QueryDocumentSnapshot<Map<String, dynamic>>> inventoryDocs) async {
@@ -386,30 +526,71 @@ class _BillingScreenState extends State<BillingScreen> {
                 decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(20)),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(20),
-                  child: _cameraError != null
-                      ? Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: Text(
-                              _cameraError!,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(color: Colors.white70),
-                            ),
-                          ),
-                        )
-                      : _controller == null
-                          ? const Center(child: CircularProgressIndicator())
-                          : FutureBuilder(
-                              future: _initializeControllerFuture,
-                              builder: (context, cameraSnapshot) {
-                                if (cameraSnapshot.connectionState == ConnectionState.done) {
-                                  return CameraPreview(_controller!);
-                                }
-                                return const Center(child: CircularProgressIndicator());
-                              },
-                            ),
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: _cameraError != null
+                            ? Center(
+                                child: Padding(
+                                  padding: const EdgeInsets.all(12),
+                                  child: Text(
+                                    _cameraError!,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(color: Colors.white70),
+                                  ),
+                                ),
+                              )
+                            : _controller == null
+                                ? const Center(child: CircularProgressIndicator())
+                                : FutureBuilder(
+                                    future: _initializeControllerFuture,
+                                    builder: (context, cameraSnapshot) {
+                                      if (cameraSnapshot.connectionState == ConnectionState.done) {
+                                        return CameraPreview(_controller!);
+                                      }
+                                      return const Center(child: CircularProgressIndicator());
+                                    },
+                                  ),
+                      ),
+                      Positioned(
+                        bottom: 10,
+                        left: 10,
+                        right: 10,
+                        child: ElevatedButton.icon(
+                          onPressed: docs.isEmpty || _isAnalyzingImage ? null : () => _analyzeBillFrame(docs),
+                          icon: _isAnalyzingImage
+                              ? const SizedBox.square(
+                                  dimension: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.auto_awesome),
+                          label: Text(_isAnalyzingImage ? 'Analyzing...' : 'Analyze Frame'),
+                        ),
+                      ),
+                      Positioned(
+                        top: 10,
+                        right: 10,
+                        child: ElevatedButton.icon(
+                          onPressed: docs.isEmpty || _isAnalyzingImage ? null : () => _analyzeUploadedBillImage(docs),
+                          icon: const Icon(Icons.upload_file),
+                          label: const Text('Upload from Device'),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
+              if (_billingScanMessage != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      _billingScanMessage!,
+                      style: const TextStyle(color: Colors.black54),
+                    ),
+                  ),
+                ),
               Expanded(
                 child: Column(
                   children: [
