@@ -8,7 +8,11 @@ import '../models/kirana_detection.dart';
 class KiranaVisionAgent {
   static const _spriteLabel = 'Sprite bottle';
   static const _laysLabel = 'Lays packet';
-  static const _customModelAssetPath = 'assets/ml/model_unquant.tflite';
+  static const List<String> _preferredModelAssetPaths = [
+    'assets/ml/model_quant.tflite',
+    'assets/ml/model.tflite',
+    'assets/ml/model_unquant.tflite',
+  ];
   static const _labelsAssetPath = 'assets/ml/labels.txt';
 
   static const List<String> _spriteKeywords = [
@@ -111,7 +115,7 @@ class KiranaVisionAgent {
     if (!_customModelInitAttempted) {
       _customModelInitAttempted = true;
 
-      final modelPath = await _copyAssetToLocalPath(_customModelAssetPath);
+      final modelPath = await _resolveCustomModelPath();
       if (modelPath != null) {
         _labelHints = await _tryLoadLabelHints();
         _cachedLabeler = ImageLabeler(
@@ -131,6 +135,14 @@ class KiranaVisionAgent {
     );
     _usingCustomModel = false;
     return _cachedLabeler!;
+  }
+
+  Future<String?> _resolveCustomModelPath() async {
+    for (final modelAssetPath in _preferredModelAssetPaths) {
+      final modelPath = await _copyAssetToLocalPath(modelAssetPath);
+      if (modelPath != null) return modelPath;
+    }
+    return null;
   }
 
   Future<ImageLabeler> _switchToOnDeviceLabeler() async {
