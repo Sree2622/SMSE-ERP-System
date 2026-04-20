@@ -28,56 +28,81 @@ class KiranaVisionAgent {
 
   ImageLabeler? _cachedLabeler;
   bool _customModelInitAttempted = false;
+  bool _usingCustomModel = false;
   List<String> _labelHints = const [];
 
   Future<List<KiranaDetection>> analyzeImage({
     required String imagePath,
     required List<String> inventoryNames,
   }) async {
-    final labeler = await _getOrCreateLabeler();
+    var labeler = await _getOrCreateLabeler();
 
     try {
-      final labels = await labeler.processImage(InputImage.fromFilePath(imagePath));
-      if (labels.isEmpty) return [];
-
-      final detectionsByLabel = <String, KiranaDetection>{};
-
-      for (final label in labels) {
-        final rawLabel = label.label.trim();
-        if (rawLabel.isEmpty) continue;
-
-        final mappedInventoryLabel = _findBestInventoryMatch(
-          candidate: rawLabel,
-          inventoryNames: inventoryNames,
-        );
-
-        if (mappedInventoryLabel == null) continue;
-
-        final confidence = label.confidence.clamp(0.0, 0.99).toDouble();
-        final existing = detectionsByLabel[mappedInventoryLabel];
-
-        if (existing == null || confidence > existing.confidence) {
-          detectionsByLabel[mappedInventoryLabel] = KiranaDetection(
-            label: mappedInventoryLabel,
-            confidence: confidence,
-            suggestedQuantity: 1,
+      return _detectFromLabeler(
+        labeler: labeler,
+        imagePath: imagePath,
+        inventoryNames: inventoryNames,
+      );
+    } catch (_) {
+      if (_usingCustomModel) {
+        labeler = await _switchToOnDeviceLabeler();
+        try {
+          return _detectFromLabeler(
+            labeler: labeler,
+            imagePath: imagePath,
+            inventoryNames: inventoryNames,
           );
+        } catch (_) {
+          return [];
         }
       }
-
-      if (detectionsByLabel.isEmpty) {
-        final fallback = _fallbackKeywordDetections(labels, inventoryNames);
-        fallback.sort((a, b) => b.confidence.compareTo(a.confidence));
-        return fallback;
-      }
-
-      final detections = detectionsByLabel.values.toList()
-        ..sort((a, b) => b.confidence.compareTo(a.confidence));
-
-      return detections;
-    } catch (_) {
       return [];
     }
+  }
+
+  Future<List<KiranaDetection>> _detectFromLabeler({
+    required ImageLabeler labeler,
+    required String imagePath,
+    required List<String> inventoryNames,
+  }) async {
+    final labels = await labeler.processImage(InputImage.fromFilePath(imagePath));
+    if (labels.isEmpty) return [];
+
+    final detectionsByLabel = <String, KiranaDetection>{};
+
+    for (final label in labels) {
+      final rawLabel = label.label.trim();
+      if (rawLabel.isEmpty) continue;
+
+      final mappedInventoryLabel = _findBestInventoryMatch(
+        candidate: rawLabel,
+        inventoryNames: inventoryNames,
+      );
+
+      if (mappedInventoryLabel == null) continue;
+
+      final confidence = label.confidence.clamp(0.0, 0.99).toDouble();
+      final existing = detectionsByLabel[mappedInventoryLabel];
+
+      if (existing == null || confidence > existing.confidence) {
+        detectionsByLabel[mappedInventoryLabel] = KiranaDetection(
+          label: mappedInventoryLabel,
+          confidence: confidence,
+          suggestedQuantity: 1,
+        );
+      }
+    }
+
+    if (detectionsByLabel.isEmpty) {
+      final fallback = _fallbackKeywordDetections(labels, inventoryNames)
+        ..sort((a, b) => b.confidence.compareTo(a.confidence));
+      return fallback;
+    }
+
+    final detections = detectionsByLabel.values.toList()
+      ..sort((a, b) => b.confidence.compareTo(a.confidence));
+
+    return detections;
   }
 
   Future<ImageLabeler> _getOrCreateLabeler() async {
@@ -96,6 +121,7 @@ class KiranaVisionAgent {
             maxCount: 10,
           ),
         );
+        _usingCustomModel = true;
         return _cachedLabeler!;
       }
     }
@@ -103,6 +129,17 @@ class KiranaVisionAgent {
     _cachedLabeler = ImageLabeler(
       options: ImageLabelerOptions(confidenceThreshold: 0.6),
     );
+    _usingCustomModel = false;
+    return _cachedLabeler!;
+  }
+
+  Future<ImageLabeler> _switchToOnDeviceLabeler() async {
+    await _cachedLabeler?.close();
+    _cachedLabeler = ImageLabeler(
+      options: ImageLabelerOptions(confidenceThreshold: 0.6),
+    );
+    _usingCustomModel = false;
+    _labelHints = const [];
     return _cachedLabeler!;
   }
 
@@ -258,5 +295,6 @@ class KiranaVisionAgent {
   Future<void> dispose() async {
     await _cachedLabeler?.close();
     _cachedLabeler = null;
+    _usingCustomModel = false;
   }
 }
