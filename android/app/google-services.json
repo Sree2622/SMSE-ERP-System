@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "703234097428",
+    "project_id": "smse-management",
+    "storage_bucket": "smse-management.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:703234097428:android:c0ea165bdb4e476f47c201",
+        "android_client_info": {
+          "package_name": "com.example.take2"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAqJpCnVpFigv6zUcNWLIcFcyOpxpi6QdY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

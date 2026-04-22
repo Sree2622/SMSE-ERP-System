@@ -1,0 +1,45 @@
+name: take2
+description: A new Flutter project
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.11.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # ML
+  tflite_flutter: ^0.12.1
+  image: ^4.0.17
+
+  # Camera & Image
+  camera: ^0.10.5+5
+  image_picker: ^1.1.2
+  path_provider: ^2.1.5
+
+  # Networking
+  http: ^1.2.2
+
+  # Firebase
+  firebase_core: ^4.6.0
+  cloud_firestore: ^6.2.0
+  firebase_auth: ^6.3.0
+
+  # UI
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/ml/model_quant.tflite
+    - assets/ml/model_unquant.tflite
+    - assets/ml/labels.txt
