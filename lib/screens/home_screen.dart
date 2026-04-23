@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../services/firestore_service.dart';
@@ -30,6 +31,13 @@ class HomeScreen extends StatelessWidget {
       appBar: AppBar(
         elevation: 0,
         backgroundColor: Colors.white,
+        actions: [
+          IconButton(
+            tooltip: 'Logout',
+            onPressed: () => FirebaseAuth.instance.signOut(),
+            icon: const Icon(Icons.logout, color: Colors.black54),
+          ),
+        ],
         title: Row(
           children: [
             Container(
