@@ -26,6 +26,97 @@ class _ScanScreenState extends State<ScanScreen> {
   String? _scanMessage;
   bool _scanMessageIsError = false;
 
+  Future<void> _showItemDialog() async {
+    final nameController = TextEditingController();
+    final stockController = TextEditingController();
+    final priceController = TextEditingController();
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.add_box, color: Color(0xff4e73df)),
+            SizedBox(width: 8),
+            Text('Add Item'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameController,
+              textCapitalization: TextCapitalization.words,
+              decoration: InputDecoration(
+                labelText: 'Item Name',
+                prefixIcon: const Icon(Icons.label_outline),
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: stockController,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: 'Stock (units)',
+                prefixIcon: const Icon(Icons.inventory_2_outlined),
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: priceController,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: 'Price (₹)',
+                prefixIcon: const Icon(Icons.currency_rupee),
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            icon: const Icon(Icons.save),
+            onPressed: () async {
+              final name = nameController.text.trim();
+              final stock = int.tryParse(stockController.text.trim()) ?? -1;
+              final price = int.tryParse(priceController.text.trim()) ?? -1;
+
+              if (name.isEmpty || stock < 0 || price < 0) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                        'Please enter a valid name, stock ≥ 0, and price ≥ 0.'),
+                  ),
+                );
+                return;
+              }
+
+              await FirestoreService.inventory.add({
+                'name': name,
+                'stock': stock,
+                'price': price,
+                'createdAt': Timestamp.now(),
+                'updatedAt': Timestamp.now(),
+              });
+
+              if (mounted) Navigator.pop(context);
+            },
+            label: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -424,6 +515,12 @@ class _ScanScreenState extends State<ScanScreen> {
               label: const Text('Clear', style: TextStyle(color: Colors.redAccent)),
             ),
         ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        backgroundColor: const Color(0xff4e73df),
+        onPressed: _showItemDialog,
+        tooltip: 'Add Item',
+        child: const Icon(Icons.add),
       ),
       body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
         stream: FirestoreService.inventory.snapshots(),
