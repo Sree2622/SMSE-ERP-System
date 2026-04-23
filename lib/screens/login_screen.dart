@@ -1,5 +1,8 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+
+import '../services/firestore_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -15,6 +18,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   bool _isLoginMode = true;
   bool _isLoading = false;
+  String _selectedRole = 'vendor';
 
   @override
   void dispose() {
@@ -35,15 +39,32 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       if (_isLoginMode) {
-        await FirebaseAuth.instance.signInWithEmailAndPassword(
+        final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
           email: email,
           password: password,
         );
+        final roleDoc =
+            await FirestoreService.users.doc(credential.user!.uid).get();
+        final savedRole = roleDoc.data()?['role']?.toString().toLowerCase();
+        if (savedRole != null && savedRole != _selectedRole) {
+          await FirebaseAuth.instance.signOut();
+          throw FirebaseAuthException(
+            code: 'role-mismatch',
+            message:
+                'This account is registered as ${savedRole.toUpperCase()}. Please choose the correct login type.',
+          );
+        }
       } else {
-        await FirebaseAuth.instance.createUserWithEmailAndPassword(
+        final credential =
+            await FirebaseAuth.instance.createUserWithEmailAndPassword(
           email: email,
           password: password,
         );
+        await FirestoreService.users.doc(credential.user!.uid).set({
+          'email': email,
+          'role': _selectedRole,
+          'createdAt': DateTime.now().toUtc().toIso8601String(),
+        }, SetOptions(merge: true));
       }
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
@@ -89,6 +110,25 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ),
                       const SizedBox(height: 20),
+                      SegmentedButton<String>(
+                        segments: const [
+                          ButtonSegment<String>(
+                            value: 'vendor',
+                            icon: Icon(Icons.storefront),
+                            label: Text('Vendor Login'),
+                          ),
+                          ButtonSegment<String>(
+                            value: 'customer',
+                            icon: Icon(Icons.payment),
+                            label: Text('Bill Pay Login'),
+                          ),
+                        ],
+                        selected: {_selectedRole},
+                        onSelectionChanged: (selection) {
+                          setState(() => _selectedRole = selection.first);
+                        },
+                      ),
+                      const SizedBox(height: 12),
                       TextFormField(
                         controller: _emailController,
                         keyboardType: TextInputType.emailAddress,

@@ -10,7 +10,9 @@ import 'scan_screen.dart';
 import 'settings_screen.dart';
 
 class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
+  final String role;
+
+  const HomeScreen({super.key, this.role = 'vendor'});
 
   Future<Map<String, dynamic>> _loadDashboardData() async {
     final revenue = await FirestoreService.fetchTodayRevenue();
@@ -66,7 +68,7 @@ class HomeScreen extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('Dashboard',
+                Text(role == 'vendor' ? 'Vendor Dashboard' : 'Dashboard',
                     style: TextStyle(
                         fontSize: 22, fontWeight: FontWeight.bold)),
                 Text(
@@ -179,33 +181,35 @@ class HomeScreen extends StatelessWidget {
                 crossAxisCount: 2,
                 crossAxisSpacing: 15,
                 mainAxisSpacing: 15,
-                children: const [
-                  _DashboardTile(
-                      icon: Icons.camera_alt,
-                      label: 'Scan Stock',
-                      color: Colors.orange,
-                      page: ScanScreen()),
-                  _DashboardTile(
-                      icon: Icons.receipt_long,
-                      label: 'New Bill',
-                      color: Colors.green,
-                      page: BillingScreen()),
-                  _DashboardTile(
-                      icon: Icons.inventory,
-                      label: 'Inventory',
-                      color: Colors.blue,
-                      page: InventoryScreen()),
-                  _DashboardTile(
-                      icon: Icons.bar_chart,
-                      label: 'Reports',
-                      color: Colors.purple,
-                      page: ReportsScreen()),
-                  _DashboardTile(
-                      icon: Icons.settings,
-                      label: 'Settings',
-                      color: Colors.grey,
-                      page: SettingsScreen()),
-                ],
+                children: role == 'vendor'
+                    ? const [
+                        _DashboardTile(
+                            icon: Icons.camera_alt,
+                            label: 'Scan Stock',
+                            color: Colors.orange,
+                            page: ScanScreen()),
+                        _DashboardTile(
+                            icon: Icons.receipt_long,
+                            label: 'New Bill',
+                            color: Colors.green,
+                            page: BillingScreen()),
+                        _DashboardTile(
+                            icon: Icons.inventory,
+                            label: 'Inventory',
+                            color: Colors.blue,
+                            page: InventoryScreen()),
+                        _DashboardTile(
+                            icon: Icons.bar_chart,
+                            label: 'Reports',
+                            color: Colors.purple,
+                            page: ReportsScreen()),
+                        _DashboardTile(
+                            icon: Icons.settings,
+                            label: 'Settings',
+                            color: Colors.grey,
+                            page: SettingsScreen()),
+                      ]
+                    : const [],
               ),
             ),
           ],

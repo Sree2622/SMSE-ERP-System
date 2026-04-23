@@ -87,70 +87,6 @@ class _BillingScreenState extends State<BillingScreen> {
     return sum;
   }
 
-  Future<String?> _showDummyPaymentGateway(int amount) async {
-    var selectedMethod = 'UPI';
-
-    return showDialog<String>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Row(
-            children: [
-              Icon(Icons.payment, color: Color(0xff4e73df)),
-              SizedBox(width: 8),
-              Text('Dummy Payment Gateway'),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Amount to collect: ₹$amount',
-                style:
-                    const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'This is a demo payment flow (no real transaction).',
-                style: TextStyle(fontSize: 12, color: Colors.black54),
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                value: selectedMethod,
-                decoration: const InputDecoration(
-                  labelText: 'Payment Method',
-                  border: OutlineInputBorder(),
-                ),
-                items: const [
-                  DropdownMenuItem(value: 'UPI', child: Text('UPI')),
-                  DropdownMenuItem(value: 'Card', child: Text('Card')),
-                  DropdownMenuItem(value: 'Cash', child: Text('Cash')),
-                ],
-                onChanged: (value) {
-                  if (value == null) return;
-                  setDialogState(() => selectedMethod = value);
-                },
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            FilledButton.icon(
-              onPressed: () => Navigator.pop(context, selectedMethod),
-              icon: const Icon(Icons.check_circle_outline),
-              label: const Text('Pay Now (Dummy)'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   void _clearCart() {
     setState(() {
       cart.clear();
@@ -462,16 +398,6 @@ class _BillingScreenState extends State<BillingScreen> {
         0,
         (sum, item) =>
             sum + _asInt(item['qty']) * _asInt(item['price']));
-    final paymentMethod = await _showDummyPaymentGateway(total);
-    if (paymentMethod == null) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Payment cancelled. Bill was not created.')),
-        );
-      }
-      return;
-    }
-
     for (final update in stockUpdates) {
       final ref = update['ref'] as DocumentReference<Map<String, dynamic>>;
       final nextStock = _asInt(update['nextStock']);
@@ -484,11 +410,9 @@ class _BillingScreenState extends State<BillingScreen> {
       'total': total,
       'createdAt': createdAt,
       'payment': {
-        'gateway': 'DummyPay',
-        'status': 'success',
-        'method': paymentMethod,
-        'paidAt': createdAt,
-        'isDummy': true,
+        'status': 'pending',
+        'method': null,
+        'paidAt': null,
       },
     });
 
