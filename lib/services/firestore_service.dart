@@ -11,6 +11,9 @@ class FirestoreService {
   static CollectionReference<Map<String, dynamic>> get bills =>
       db.collection('bills');
 
+  static CollectionReference<Map<String, dynamic>> get users =>
+      db.collection('users');
+
   static DocumentReference<Map<String, dynamic>> get shopProfile =>
       db.collection('settings').doc('shop_profile');
 

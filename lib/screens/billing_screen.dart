@@ -357,6 +357,7 @@ class _BillingScreenState extends State<BillingScreen> {
     }
 
     final items = <Map<String, dynamic>>[];
+    final stockUpdates = <Map<String, dynamic>>[];
     var skippedOutOfStock = 0;
     for (final doc in inventoryDocs) {
       final qty = cart[doc.id] ?? 0;
@@ -375,9 +376,10 @@ class _BillingScreenState extends State<BillingScreen> {
         'qty': qty,
         'price': price,
       });
-
-      await doc.reference
-          .update({'stock': stock - qty, 'updatedAt': Timestamp.now()});
+      stockUpdates.add({
+        'ref': doc.reference,
+        'nextStock': stock - qty,
+      });
     }
 
     if (items.isEmpty) {
@@ -396,12 +398,22 @@ class _BillingScreenState extends State<BillingScreen> {
         0,
         (sum, item) =>
             sum + _asInt(item['qty']) * _asInt(item['price']));
+    for (final update in stockUpdates) {
+      final ref = update['ref'] as DocumentReference<Map<String, dynamic>>;
+      final nextStock = _asInt(update['nextStock']);
+      await ref.update({'stock': nextStock, 'updatedAt': Timestamp.now()});
+    }
 
     final billRef = await FirestoreService.bills.add({
       'items': items,
       'itemCount': itemCount,
       'total': total,
       'createdAt': createdAt,
+      'payment': {
+        'status': 'pending',
+        'method': null,
+        'paidAt': null,
+      },
     });
 
     if (mounted) {
